@@ -7,3 +7,7 @@ venv/
 *.parquet
 .DS_Store
 node_modules/
+*.log
+browser_profile/
+chrome_debug_profile/
+.claude/settings.local.json
