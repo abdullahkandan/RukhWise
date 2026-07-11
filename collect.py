@@ -189,12 +189,12 @@ def _wait_for_new_first_card(page, previous_href: str | None, timeout_ms: int = 
         return False
 
 
-def run_rozee_live(max_pages: int, run_id: str) -> None:
+def run_rozee_live(max_pages: int, run_id: str, category: str | None = None) -> None:
     from playwright.sync_api import sync_playwright
     from rozee_parser import parse_listing_page
     from storage import upsert_postings
 
-    logger.info(f"[{run_id}] Rozee live-CDP collection starting, max {max_pages} pages")
+    logger.info(f"[{run_id}] Rozee live-CDP collection starting, max {max_pages} pages, category={category!r}")
 
     all_jobs: list[dict] = []
     pages_fetched = 0
@@ -265,6 +265,7 @@ def run_rozee_live(max_pages: int, run_id: str) -> None:
             new_jobs = [j for j in page_jobs if j.get("detail_url") not in seen_urls]
             for j in new_jobs:
                 j["source"] = "rozee"
+                j["category"] = category
                 seen_urls.add(j["detail_url"])
 
             pages_fetched += 1
@@ -322,7 +323,13 @@ def main() -> None:
     parser.add_argument("--max-pages", type=int, default=5, help="Max pages for Rozee --live")
     parser.add_argument("--live", action="store_true", help="Rozee CDP batch-enrichment mode")
     parser.add_argument("--url", default=MUSTAKBIL_DEFAULT_URL, help="Mustakbil start URL override (general feed only)")
-    parser.add_argument("--category", choices=["all", "it"], default="all", help="Mustakbil feed to collect")
+    parser.add_argument(
+        "--category", default=None,
+        help="Category label stored into postings.category. For Mustakbil, 'it' "
+             "additionally switches the feed itself (default: 'all'); any other "
+             "value is just a label. For Rozee, purely a label (e.g. 'data_search' "
+             "for a q/data-style search session) -- doesn't change what's fetched.",
+    )
     parser.add_argument("--enrich-all", action="store_true", help="Backfill full detail for existing null/short-description postings")
     args = parser.parse_args()
 
@@ -336,12 +343,13 @@ def main() -> None:
         return
 
     if args.source == "mustakbil":
-        run_mustakbil(pages=args.pages, start_url=args.url, category=args.category, run_id=run_id)
+        category = args.category or "all"
+        run_mustakbil(pages=args.pages, start_url=args.url, category=category, run_id=run_id)
     elif args.source == "rozee":
         if not args.live:
             logger.error("--source rozee requires --live (CDP-connected batch enrichment only)")
             sys.exit(1)
-        run_rozee_live(max_pages=args.max_pages, run_id=run_id)
+        run_rozee_live(max_pages=args.max_pages, run_id=run_id, category=args.category)
 
 
 if __name__ == "__main__":
