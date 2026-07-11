@@ -21,8 +21,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run Mustakbil collection
+      - name: Run Mustakbil collection (general feed)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python collect.py --source mustakbil --pages 10
+        run: python collect.py --source mustakbil --category all --pages 10
+
+      - name: Run Mustakbil collection (IT category)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python collect.py --source mustakbil --category it --pages 10
