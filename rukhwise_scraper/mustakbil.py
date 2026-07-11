@@ -279,8 +279,8 @@ def _html_to_text(html: str | None) -> str | None:
 
 def fetch_job_detail(job_id: str) -> dict | None:
     """Fetch and parse one job's full detail from the per-job API endpoint.
-    Returns {"description": str|None, "skills_raw": dict|None}, or None if
-    the fetch/parse failed outright.
+    Returns {"description": str|None, "skills_raw": dict|None, "currency":
+    str}, or None if the fetch/parse failed outright.
     """
     resp = _fetch(API_DETAIL_URL_TEMPLATE.format(id=job_id))
     if resp is None:
@@ -296,8 +296,12 @@ def fetch_job_detail(job_id: str) -> dict | None:
     required_skills_text = _html_to_text(payload.get("requiredSkills"))
     # Distinguishable from Rozee's tag-list skills_raw shape (a plain list of strings).
     skills_raw = {"required_skills_text": required_skills_text} if required_skills_text else None
+    # The API's own currency field is usually "PKR", but not every job carries
+    # one (and a handful of listings are genuinely non-PKR, e.g. EUR-denominated
+    # remote postings) -- default to PKR only when the field is truly absent.
+    currency = payload.get("currency") or "PKR"
 
-    return {"description": description, "skills_raw": skills_raw}
+    return {"description": description, "skills_raw": skills_raw, "currency": currency}
 
 
 def enrich_jobs(targets: list[dict]) -> dict:
@@ -334,6 +338,7 @@ def enrich_jobs(targets: list[dict]) -> dict:
             "detail_url": target.get("detail_url") or DETAIL_URL_TEMPLATE.format(id=job_id),
             "description": detail["description"],
             "skills_raw": detail["skills_raw"],
+            "currency": detail["currency"],
         })
 
     logger.info(f"enrich_jobs: {len(enriched)} enriched, {failed} failed, of {len(targets)} targets")

@@ -62,6 +62,13 @@ def _parse_card(card) -> dict | None:
         "experience": _extract_text(card, "span.func-area-drn"),
         "salary_min": salary_min,
         "salary_max": salary_max,
+        # Hardcoded, not extracted: Rozee's own salary field is explicitly
+        # labeled "Offer Salary - PKR" in the markup (see the selector in
+        # _extract_salary below) -- there's no per-posting currency value on
+        # this site, PKR is a platform-wide convention. Unlike Mustakbil,
+        # there's no API field to read this from, so this is an assumption,
+        # not a measurement -- revisit if Rozee ever adds non-PKR listings.
+        "currency": "PKR",
         "skills": _extract_skills(card),
         "detail_url": detail_url,
         "scraped_at": datetime.now(timezone.utc).isoformat(),

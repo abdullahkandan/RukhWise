@@ -41,6 +41,7 @@ create table if not exists postings (
     salary_min integer,
     salary_max integer,
     salary_raw text,
+    currency text,
     skills_raw jsonb,
     description text,
     scraped_at timestamptz,
@@ -50,9 +51,10 @@ create table if not exists postings (
 );
 
 -- Idempotent: safe to re-run against a database that already has the table
--- (adds the column added for multi-stream collection) or a brand new one
--- (already created above, this is then a no-op).
+-- (adds columns added in later migrations) or a brand new one (already
+-- created above, these are then no-ops).
 alter table postings add column if not exists category text;
+alter table postings add column if not exists currency text;
 """
 
 FORECASTS_TABLE_SQL = """\
@@ -131,6 +133,7 @@ begin
             salary_min integer,
             salary_max integer,
             salary_raw text,
+            currency text,
             skills_raw jsonb,
             description text,
             scraped_at timestamptz,
@@ -142,7 +145,7 @@ begin
         insert into postings as p (
             source, detail_url, source_job_id, first_seen_at, last_seen_at,
             title, company, city, posting_date, experience_raw,
-            salary_min, salary_max, salary_raw, skills_raw, description,
+            salary_min, salary_max, salary_raw, currency, skills_raw, description,
             scraped_at, scrape_run_id, category
         )
         select
@@ -151,7 +154,7 @@ begin
             incoming.title, incoming.company, incoming.city,
             incoming.posting_date, incoming.experience_raw,
             incoming.salary_min, incoming.salary_max, incoming.salary_raw,
-            incoming.skills_raw, incoming.description,
+            incoming.currency, incoming.skills_raw, incoming.description,
             incoming.scraped_at, incoming.scrape_run_id, incoming.category
         from incoming
         on conflict (source, detail_url) do update set
@@ -174,9 +177,9 @@ $$;
 
 # Targeted content upgrade, separate from upsert_postings_batch on purpose --
 # enrichment never touches first_seen_at/last_seen_at/category/scrape_run_id,
-# it only replaces description/skills_raw for postings that already exist.
-# coalesce() so a row with a genuinely-empty detail-page field doesn't null
-# out a perfectly good value the listing endpoint already gave us.
+# it only replaces description/skills_raw/currency for postings that already
+# exist. coalesce() so a row with a genuinely-empty detail-page field doesn't
+# null out a perfectly good value the listing endpoint already gave us.
 ENRICH_FUNCTION_SQL = """\
 create or replace function enrich_postings_batch(payload jsonb)
 returns table(detail_url text)
@@ -191,13 +194,15 @@ begin
             source text,
             detail_url text,
             description text,
-            skills_raw jsonb
+            skills_raw jsonb,
+            currency text
         )
     ),
     upd as (
         update postings p
         set description = coalesce(incoming.description, p.description),
-            skills_raw   = coalesce(incoming.skills_raw, p.skills_raw)
+            skills_raw   = coalesce(incoming.skills_raw, p.skills_raw),
+            currency     = coalesce(incoming.currency, p.currency)
         from incoming
         where p.source = incoming.source and p.detail_url = incoming.detail_url
         returning p.detail_url
@@ -266,6 +271,7 @@ def _row_to_record(row: dict, run_id: str, now_iso: str) -> dict | None:
         "salary_min": row.get("salary_min"),
         "salary_max": row.get("salary_max"),
         "salary_raw": row.get("salary_raw"),
+        "currency": row.get("currency"),
         "skills_raw": row.get("skills") or [],
         "description": row.get("description"),
         "scraped_at": row.get("scraped_at") or now_iso,
@@ -343,13 +349,14 @@ def upsert_postings(rows: list[dict], run_id: str) -> dict:
 
 
 def enrich_postings(rows: list[dict]) -> dict:
-    """Write fetched description/skills_raw into existing postings, matched
-    on (source, detail_url). Does not touch first_seen_at/last_seen_at/
-    category/scrape_run_id -- this is a content upgrade, not a re-crawl.
+    """Write fetched description/skills_raw/currency into existing postings,
+    matched on (source, detail_url). Does not touch first_seen_at/
+    last_seen_at/category/scrape_run_id -- this is a content upgrade, not a
+    re-crawl.
 
-    `rows` are expected to already contain fetched 'description' and
-    'skills_raw' (e.g. from mustakbil.enrich_jobs()'s output), not raw
-    listing rows.
+    `rows` are expected to already contain fetched 'description',
+    'skills_raw', and 'currency' (e.g. from mustakbil.enrich_jobs()'s
+    output), not raw listing rows.
 
     Returns {"enriched": int, "enrich_failed": int}.
     """
@@ -364,6 +371,7 @@ def enrich_postings(rows: list[dict]) -> dict:
             "detail_url": detail_url,
             "description": row.get("description"),
             "skills_raw": row.get("skills_raw"),
+            "currency": row.get("currency"),
         })
 
     enriched = 0
@@ -396,8 +404,8 @@ def _skills_raw_empty(skills_raw) -> bool:
 
 def get_postings_needing_enrichment(word_threshold: int = 120) -> list[dict]:
     """Every Mustakbil posting currently in Supabase with a null/short
-    (<word_threshold words) description OR an empty skills_raw -- the
-    one-time backfill target set for --enrich-all.
+    (<word_threshold words) description OR an empty skills_raw OR a null
+    currency -- the one-time backfill target set for --enrich-all.
 
     120 words separates the two populations we actually have: listing-
     derived descriptions top out around 100 words, detail-page descriptions
@@ -405,7 +413,8 @@ def get_postings_needing_enrichment(word_threshold: int = 120) -> list[dict]:
     overlap. skills_raw is checked separately because a listing-derived
     description can already clear 120 words while still having never been
     enriched (empty skills_raw is the more reliable "hasn't been enriched
-    yet" signal on its own).
+    yet" signal on its own). currency is checked the same way, for postings
+    collected before the currency column existed.
 
     Scoped to source='mustakbil' only -- detail enrichment is Mustakbil-
     API-specific, and Rozee rows legitimately have null descriptions until
@@ -418,7 +427,7 @@ def get_postings_needing_enrichment(word_threshold: int = 120) -> list[dict]:
     while True:
         res = (
             client.table("postings")
-            .select("source_job_id,detail_url,description,skills_raw")
+            .select("source_job_id,detail_url,description,skills_raw,currency")
             .eq("source", "mustakbil")
             .range(offset, offset + _QUERY_PAGE_SIZE - 1)
             .execute()
@@ -433,7 +442,7 @@ def get_postings_needing_enrichment(word_threshold: int = 120) -> list[dict]:
     for r in rows:
         desc = r.get("description")
         desc_short = not desc or len(desc.split()) < word_threshold
-        if desc_short or _skills_raw_empty(r.get("skills_raw")):
+        if desc_short or _skills_raw_empty(r.get("skills_raw")) or not r.get("currency"):
             targets.append({"source_job_id": r["source_job_id"], "detail_url": r["detail_url"]})
     return targets
 
