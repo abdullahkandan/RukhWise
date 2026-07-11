@@ -21,6 +21,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Both steps below also run skill extraction (taxonomy_v1) automatically
+      # for the postings they touch -- collect.py calls extract.run_extraction()
+      # after upsert+enrichment, scoped to that run's scrape_run_id. No separate
+      # extraction step is needed here; --enrich-all / extract.py --all are
+      # one-time backfill commands run manually, not part of the schedule.
       - name: Run Mustakbil collection (general feed)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

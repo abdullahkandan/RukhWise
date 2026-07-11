@@ -1,0 +1,443 @@
+# Rukhwise skill taxonomy v1
+#
+# 96 canonical skills across 11 categories. Aliases are matched as whole
+# words/phrases (see extract_skills.py) against posting title + description
+# + skills_raw text -- casing doesn't matter, but the phrase must appear as
+# a standalone token sequence, not as a substring inside another word.
+#
+# `signal` on a category is a downstream hint for consumers of extracted
+# skills, not something extract_skills.py itself uses: soft skills are
+# near-universal in job postings (almost every listing says "communication"
+# somewhere) and carry weak differentiation value on their own, so they're
+# marked `low`. Everything else is `normal`.
+
+categories:
+  programming: {signal: normal}
+  analytics_bi: {signal: normal}
+  data_ml: {signal: normal}
+  marketing_tech: {signal: normal}
+  web_ecommerce: {signal: normal}
+  enterprise_erp: {signal: normal}
+  cloud_devops: {signal: normal}
+  design: {signal: normal}
+  accounting_finance: {signal: normal}
+  office_admin: {signal: normal}
+  soft: {signal: low}
+
+skills:
+
+  # ---------- programming (12) ----------
+  python:
+    display: Python
+    category: programming
+    aliases: [python, python3, "python 3"]
+  sql:
+    display: SQL
+    category: programming
+    aliases: [sql, t-sql, tsql, pl/sql, plsql, mysql, postgresql, postgres, "sql server", "ms sql", "ms sql server"]
+  javascript:
+    display: JavaScript
+    category: programming
+    aliases: [javascript, "java script", js, ecmascript]
+  java:
+    display: Java
+    category: programming
+    aliases: [java, "core java"]
+  php:
+    display: PHP
+    category: programming
+    aliases: [php]
+  "c++":
+    display: C++
+    category: programming
+    aliases: ["c++", cpp, "c/c++"]
+  "c#":
+    display: C#
+    category: programming
+    aliases: ["c#", csharp, "c sharp"]
+  r:
+    display: R
+    category: programming
+    # Bare "r" was dropped after extraction testing: every match in the
+    # real corpus (6/6) came from "R&D" or a company name ("R&B Logistics"),
+    # not the R language -- the token-boundary regex worked exactly as
+    # designed (isolated token, not a substring), but "R&D" is genuinely
+    # indistinguishable from "R" the language by token shape alone. Keeping
+    # only qualified aliases avoids that 100%-false-positive case.
+    aliases: ["r programming", "r language", rstudio, "r studio"]
+  typescript:
+    display: TypeScript
+    category: programming
+    aliases: [typescript, ts]
+  html_css:
+    display: HTML/CSS
+    category: programming
+    aliases: [html, css, "html/css", "html & css", "html and css", html5, css3]
+  git:
+    display: Git
+    category: programming
+    aliases: [git, github, gitlab, "version control", "git/github"]
+  apis:
+    display: APIs
+    category: programming
+    aliases: [api, apis, "rest api", "restful api", "rest apis", "web api", "web apis", "api integration"]
+
+  # ---------- analytics_bi (10) ----------
+  power_bi:
+    display: Power BI
+    category: analytics_bi
+    aliases: ["power bi", powerbi, "power-bi", "ms power bi", "microsoft power bi", pbi]
+  tableau:
+    display: Tableau
+    category: analytics_bi
+    aliases: [tableau, "tableau desktop", "tableau server"]
+  excel:
+    display: Excel
+    category: analytics_bi
+    aliases: [excel, "ms excel", "microsoft excel", "advanced excel", "excel formulas", "pivot tables", "pivot table", vlookup, xlookup]
+  google_analytics:
+    display: Google Analytics
+    category: analytics_bi
+    aliases: ["google analytics", ga4, "google analytics 4"]
+  looker:
+    display: Looker
+    category: analytics_bi
+    aliases: [looker, "looker studio", "google data studio", "data studio"]
+  data_analysis:
+    display: Data Analysis
+    category: analytics_bi
+    aliases: ["data analysis", "data analytics", "data analyst", "analyzing data"]
+  statistics:
+    display: Statistics
+    category: analytics_bi
+    aliases: [statistics, "statistical analysis", "statistical modeling", "statistical methods", biostatistics, spss]
+  ab_testing:
+    display: A/B Testing
+    category: analytics_bi
+    aliases: ["a/b testing", "ab testing", "a b testing", "split testing", "a/b test"]
+  data_visualization:
+    display: Data Visualization
+    category: analytics_bi
+    aliases: ["data visualization", "data viz", dashboards, "dashboard building", "dashboard creation", "dashboard design"]
+  reporting:
+    display: Reporting
+    category: analytics_bi
+    aliases: [reporting, "report writing", "report generation", "mis reporting", "business reporting"]
+
+  # ---------- data_ml (8) ----------
+  machine_learning:
+    display: Machine Learning
+    category: data_ml
+    aliases: ["machine learning", ml]
+  deep_learning:
+    display: Deep Learning
+    category: data_ml
+    aliases: ["deep learning", "neural networks", "neural network"]
+  nlp:
+    display: NLP
+    category: data_ml
+    aliases: [nlp, "natural language processing"]
+  pandas:
+    display: Pandas
+    category: data_ml
+    aliases: [pandas]
+  numpy:
+    display: NumPy
+    category: data_ml
+    aliases: [numpy]
+  tensorflow_pytorch:
+    display: TensorFlow/PyTorch
+    category: data_ml
+    aliases: [tensorflow, pytorch, "tensor flow", "py torch", keras]
+  etl:
+    display: ETL
+    category: data_ml
+    aliases: [etl, "etl pipelines", "extract transform load", "data pipelines", "data pipeline", "etl pipeline"]
+  data_engineering:
+    display: Data Engineering
+    category: data_ml
+    aliases: ["data engineering", "data engineer", "data warehousing", "data warehouse", "big data", hadoop, spark, pyspark, bigquery]
+
+  # ---------- marketing_tech (14) ----------
+  crm:
+    display: CRM
+    category: marketing_tech
+    aliases: [crm, "customer relationship management", "crm software", "crm systems", "crm tools", "crm records"]
+  hubspot:
+    display: HubSpot
+    category: marketing_tech
+    aliases: [hubspot, "hub spot"]
+  zoho:
+    display: Zoho
+    category: marketing_tech
+    aliases: [zoho, "zoho crm"]
+  salesforce:
+    display: Salesforce
+    category: marketing_tech
+    aliases: [salesforce, "salesforce crm", "salesforce sales cloud", sfdc]
+  moengage:
+    display: MoEngage
+    category: marketing_tech
+    aliases: [moengage, "mo engage"]
+  braze:
+    display: Braze
+    category: marketing_tech
+    aliases: [braze]
+  clevertap:
+    display: CleverTap
+    category: marketing_tech
+    aliases: [clevertap, "clever tap"]
+  seo:
+    display: SEO
+    category: marketing_tech
+    aliases: [seo, "search engine optimization", "seo strategy", "on-page seo", "off-page seo", "seo audit"]
+  sem_ppc:
+    display: SEM/PPC
+    category: marketing_tech
+    aliases: [sem, ppc, "ppc campaigns", "pay per click", "paid advertising", "google ads", "meta ads", "facebook ads", "search engine marketing"]
+  social_media_marketing:
+    display: Social Media Marketing
+    category: marketing_tech
+    aliases: ["social media marketing", "social media management", smm, "social media"]
+  email_marketing:
+    display: Email Marketing
+    category: marketing_tech
+    aliases: ["email marketing", "email campaigns", "email marketing campaigns"]
+  content_marketing:
+    display: Content Marketing
+    category: marketing_tech
+    aliases: ["content marketing", "content strategy", "content creation", copywriting]
+  digital_marketing:
+    display: Digital Marketing
+    category: marketing_tech
+    aliases: ["digital marketing", "online marketing"]
+  marketing_automation:
+    display: Marketing Automation
+    category: marketing_tech
+    aliases: ["marketing automation", "marketing automation platforms", "marketing automation tools"]
+
+  # ---------- web_ecommerce (8) ----------
+  wordpress:
+    display: WordPress
+    category: web_ecommerce
+    aliases: [wordpress, "word press"]
+  shopify:
+    display: Shopify
+    category: web_ecommerce
+    aliases: [shopify, "shopify store", "shopify platform", "shopify management"]
+  amazon_marketplace:
+    display: Amazon Marketplace
+    category: web_ecommerce
+    aliases: [amazon, "seller central", "amazon fba", fba, "jungle scout", "helium 10"]
+  ebay:
+    display: eBay
+    category: web_ecommerce
+    aliases: [ebay, "ebay seller hub"]
+  daraz:
+    display: Daraz
+    category: web_ecommerce
+    aliases: [daraz, "daraz seller"]
+  react:
+    display: React
+    category: web_ecommerce
+    aliases: [react, "react.js", reactjs, "react js"]
+  nextjs:
+    display: Next.js
+    category: web_ecommerce
+    aliases: ["next.js", nextjs, "next js"]
+  nodejs:
+    display: Node.js
+    category: web_ecommerce
+    aliases: ["node.js", nodejs, "node js"]
+
+  # ---------- enterprise_erp (7) ----------
+  sap:
+    display: SAP
+    category: enterprise_erp
+    aliases: [sap, "sap erp", "sap fico", "sap mm", "sap hana"]
+  oracle:
+    display: Oracle
+    category: enterprise_erp
+    aliases: [oracle, "oracle erp", "oracle db", "oracle database"]
+  tally:
+    display: Tally
+    category: enterprise_erp
+    aliases: [tally, "tally erp", "tally.erp9", "tally erp 9", tallyprime]
+  quickbooks:
+    display: QuickBooks
+    category: enterprise_erp
+    aliases: [quickbooks, "quick books"]
+  erp:
+    display: ERP
+    category: enterprise_erp
+    aliases: [erp, "enterprise resource planning", "erp systems", "erp software"]
+  odoo:
+    display: Odoo
+    category: enterprise_erp
+    aliases: [odoo]
+  ms_dynamics:
+    display: MS Dynamics
+    category: enterprise_erp
+    aliases: ["ms dynamics", "microsoft dynamics", "dynamics 365", d365, "dynamics crm"]
+
+  # ---------- cloud_devops (7) ----------
+  aws:
+    display: AWS
+    category: cloud_devops
+    aliases: [aws, "amazon web services"]
+  azure:
+    display: Azure
+    category: cloud_devops
+    aliases: [azure, "microsoft azure", "ms azure"]
+  gcp:
+    display: GCP
+    category: cloud_devops
+    aliases: [gcp, "google cloud platform", "google cloud"]
+  docker:
+    display: Docker
+    category: cloud_devops
+    aliases: [docker, containerization, containers]
+  kubernetes:
+    display: Kubernetes
+    category: cloud_devops
+    aliases: [kubernetes, k8s]
+  linux:
+    display: Linux
+    category: cloud_devops
+    aliases: [linux, unix, centos, redhat, "red hat", ubuntu]
+  ci_cd:
+    display: CI/CD
+    category: cloud_devops
+    aliases: ["ci/cd", cicd, "ci cd", "continuous integration", "continuous deployment", "continuous delivery", jenkins]
+
+  # ---------- design (6) ----------
+  figma:
+    display: Figma
+    category: design
+    aliases: [figma]
+  adobe_photoshop:
+    display: Adobe Photoshop
+    category: design
+    aliases: [photoshop, "adobe photoshop"]
+  adobe_illustrator:
+    display: Adobe Illustrator
+    category: design
+    # Deliberately excludes bare "ai" -- that's an unrelated, extremely
+    # common false-positive collision with Artificial Intelligence mentions.
+    aliases: [illustrator, "adobe illustrator"]
+  canva:
+    display: Canva
+    category: design
+    aliases: [canva]
+  ui_ux:
+    display: UI/UX
+    category: design
+    aliases: ["ui/ux", "ux/ui", "ui ux", "ux ui", "user interface", "user experience", "ui design", "ux design", "user experience design"]
+  video_editing:
+    display: Video Editing
+    category: design
+    aliases: ["video editing", "video editor", "video production"]
+
+  # ---------- accounting_finance (7) ----------
+  accounting:
+    display: Accounting
+    category: accounting_finance
+    aliases: [accounting, accountancy, "basic accounting", "accounting principles", المحاسبة]
+  bookkeeping:
+    display: Bookkeeping
+    category: accounting_finance
+    aliases: [bookkeeping, "book keeping"]
+  financial_analysis:
+    display: Financial Analysis
+    category: accounting_finance
+    aliases: ["financial analysis", "financial modeling", "basic financial analysis"]
+  audit:
+    display: Audit
+    category: accounting_finance
+    aliases: [audit, auditing, "internal audit", "audit planning"]
+  taxation:
+    display: Taxation
+    category: accounting_finance
+    aliases: [taxation, tax, "sales tax", "income tax"]
+  payroll:
+    display: Payroll
+    category: accounting_finance
+    aliases: [payroll, "payroll processing", "payroll management"]
+  financial_reporting:
+    display: Financial Reporting
+    category: accounting_finance
+    aliases: ["financial reporting", "financial statements", "financial reporting and analysis"]
+
+  # ---------- office_admin (5) ----------
+  ms_office:
+    display: MS Office
+    category: office_admin
+    aliases: ["ms office", "microsoft office", "office suite", "microsoft office suite"]
+  ms_word:
+    display: MS Word
+    category: office_admin
+    # Deliberately excludes bare "word" -- far too common an English word to
+    # use as a standalone alias.
+    aliases: ["ms word", "microsoft word", "word processing"]
+  powerpoint:
+    display: PowerPoint
+    category: office_admin
+    aliases: [powerpoint, "power point", "ms powerpoint", "microsoft powerpoint", ppt]
+  google_workspace:
+    display: Google Workspace
+    category: office_admin
+    aliases: ["google workspace", gsuite, "g suite", "google docs", "google sheets", "google slides"]
+  data_entry:
+    display: Data Entry
+    category: office_admin
+    aliases: ["data entry", "data entry operator", typing]
+
+  # ---------- soft (12) ----------
+  communication:
+    display: Communication
+    category: soft
+    aliases: [communication, "communication skills", "verbal communication", "written communication"]
+  teamwork:
+    display: Teamwork
+    category: soft
+    aliases: [teamwork, "team work", "team player", collaboration]
+  leadership:
+    display: Leadership
+    category: soft
+    aliases: [leadership, "team leadership", "leadership skills"]
+  negotiation:
+    display: Negotiation
+    category: soft
+    aliases: [negotiation, "negotiation skills"]
+  problem_solving:
+    display: Problem Solving
+    category: soft
+    aliases: ["problem solving", "problem-solving", "analytical thinking", "critical thinking"]
+  time_management:
+    display: Time Management
+    category: soft
+    aliases: ["time management", "time-management"]
+  customer_service:
+    display: Customer Service
+    category: soft
+    aliases: ["customer service", "customer support", "customer care"]
+  sales_skills:
+    display: Sales Skills
+    category: soft
+    aliases: ["sales skills", "sales experience", "closing sales", "sales targets"]
+  presentation:
+    display: Presentation
+    category: soft
+    aliases: [presentation, "presentation skills", "presentation design"]
+  project_management:
+    display: Project Management
+    category: soft
+    aliases: ["project management", "project coordination", pmp]
+  stakeholder_management:
+    display: Stakeholder Management
+    category: soft
+    aliases: ["stakeholder management", "stakeholder engagement", "stakeholder communication", "stakeholder coordination"]
+  english_proficiency:
+    display: English Proficiency
+    category: soft
+    aliases: ["english proficiency", "fluent english", "english communication", "spoken english", "written english", "english language"]

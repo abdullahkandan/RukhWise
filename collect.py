@@ -67,6 +67,17 @@ def _enrich_new_postings(new_postings: list[dict], run_id: str) -> dict:
     }
 
 
+def _extract_skills_for_run(run_id: str) -> dict:
+    """Skill extraction over every posting this run touched (inserted or
+    updated -- get_postings_for_extraction(run_id) naturally covers both,
+    since upsert_postings stamps scrape_run_id on both). Safe to call even
+    if nothing new happened; re-extraction is a no-op via ON CONFLICT DO
+    NOTHING in storage.store_skill_mentions()."""
+    from extract import run_extraction
+
+    return run_extraction(run_id=run_id)
+
+
 def run_mustakbil(pages: int, start_url: str, category: str, run_id: str) -> None:
     from mustakbil import fetch_search_pages, fetch_search_pages_by_category
     from storage import upsert_postings
@@ -87,6 +98,7 @@ def run_mustakbil(pages: int, start_url: str, category: str, run_id: str) -> Non
 
     counts = upsert_postings(jobs, run_id=run_id)
     enrich_result = _enrich_new_postings(counts["new_postings"], run_id)
+    extract_result = _extract_skills_for_run(run_id)
 
     _log_summary(
         run_id=run_id,
@@ -95,6 +107,7 @@ def run_mustakbil(pages: int, start_url: str, category: str, run_id: str) -> Non
         postings_parsed=len(jobs),
         counts=counts,
         enrich_result=enrich_result,
+        extract_result=extract_result,
     )
 
 
@@ -266,6 +279,7 @@ def run_rozee_live(max_pages: int, run_id: str) -> None:
     logger.info(f"[{run_id}] Fetched {pages_fetched} pages, parsed {len(all_jobs)} postings")
 
     counts = upsert_postings(all_jobs, run_id=run_id)
+    extract_result = _extract_skills_for_run(run_id)
 
     _log_summary(
         run_id=run_id,
@@ -273,6 +287,7 @@ def run_rozee_live(max_pages: int, run_id: str) -> None:
         pages_fetched=pages_fetched,
         postings_parsed=len(all_jobs),
         counts=counts,
+        extract_result=extract_result,
     )
 
 
@@ -283,6 +298,7 @@ def _log_summary(
     postings_parsed: int,
     counts: dict,
     enrich_result: dict | None = None,
+    extract_result: dict | None = None,
 ) -> None:
     msg = (
         f"[{run_id}] RUN SUMMARY source={source} pages_fetched={pages_fetched} "
@@ -291,6 +307,11 @@ def _log_summary(
     )
     if enrich_result is not None:
         msg += f" enriched={enrich_result['enriched']} enrich_failed={enrich_result['enrich_failed']}"
+    if extract_result is not None:
+        msg += (
+            f" skill_mentions_inserted={extract_result['inserted']} "
+            f"skill_mentions_skipped={extract_result['skipped']}"
+        )
     logger.info(msg)
 
 

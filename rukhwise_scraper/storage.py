@@ -70,6 +70,18 @@ create table if not exists forecasts (
 );
 """
 
+SKILL_MENTIONS_TABLE_SQL = """\
+create table if not exists skill_mentions (
+    id uuid primary key default gen_random_uuid(),
+    posting_id uuid references postings(id),
+    skill text not null,
+    category text not null,
+    extraction_method text not null,
+    extracted_at timestamptz default now(),
+    unique(posting_id, skill, extraction_method)
+);
+"""
+
 # PostgREST's built-in .upsert() replaces every column it's given on conflict --
 # there's no way to tell it "only touch these three columns." A plpgsql function
 # is the only way to get selective-column-on-conflict AND single-round-trip
@@ -198,6 +210,7 @@ $$;
 ALL_SQL = "\n".join([
     POSTINGS_TABLE_SQL,
     FORECASTS_TABLE_SQL,
+    SKILL_MENTIONS_TABLE_SQL,
     DROP_OLD_UPSERT_FUNCTION_SQL,
     UPSERT_FUNCTION_SQL,
     ENRICH_FUNCTION_SQL,
@@ -423,6 +436,81 @@ def get_postings_needing_enrichment(word_threshold: int = 120) -> list[dict]:
         if desc_short or _skills_raw_empty(r.get("skills_raw")):
             targets.append({"source_job_id": r["source_job_id"], "detail_url": r["detail_url"]})
     return targets
+
+
+def get_postings_for_extraction(run_id: str | None = None) -> list[dict]:
+    """Postings to run skill extraction over: either every posting in
+    Supabase (run_id=None, the --all backfill path) or just the ones from
+    one scrape run (run_id='...', the normal per-collection path)."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        query = client.table("postings").select("id,title,description,skills_raw")
+        if run_id is not None:
+            query = query.eq("scrape_run_id", run_id)
+        res = query.range(offset, offset + _QUERY_PAGE_SIZE - 1).execute()
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def store_skill_mentions(mentions: list[dict], extraction_method: str) -> dict:
+    """Batch-insert skill mentions, ON CONFLICT (posting_id, skill,
+    extraction_method) DO NOTHING -- re-running extraction over
+    already-processed postings is always safe and cheap; it just no-ops on
+    rows already recorded for that method.
+
+    Each mention dict needs: posting_id, skill, category.
+    Returns {"inserted": int, "skipped": int, "failed": int}.
+    """
+    records = []
+    for m in mentions:
+        posting_id = m.get("posting_id")
+        skill = m.get("skill")
+        category = m.get("category")
+        if not posting_id or not skill or not category:
+            continue
+        records.append({
+            "posting_id": posting_id,
+            "skill": skill,
+            "category": category,
+            "extraction_method": extraction_method,
+        })
+
+    failed = len(mentions) - len(records)
+    inserted = 0
+    skipped = 0
+
+    if records:
+        client = _get_client()
+        for i in range(0, len(records), _BATCH_SIZE):
+            batch = records[i : i + _BATCH_SIZE]
+            try:
+                result = (
+                    client.table("skill_mentions")
+                    .upsert(
+                        batch,
+                        on_conflict="posting_id,skill,extraction_method",
+                        ignore_duplicates=True,
+                    )
+                    .execute()
+                )
+                matched = len(result.data or [])
+                inserted += matched
+                skipped += len(batch) - matched
+            except Exception as exc:
+                logger.error(f"Batch skill_mentions insert failed ({len(batch)} rows): {exc}")
+                failed += len(batch)
+
+    logger.info(
+        f"store_skill_mentions: inserted={inserted} skipped={skipped} failed={failed} "
+        f"(extraction_method={extraction_method})"
+    )
+    return {"inserted": inserted, "skipped": skipped, "failed": failed}
 
 
 if __name__ == "__main__":
