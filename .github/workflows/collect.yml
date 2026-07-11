@@ -1,4 +1,4 @@
-name: Collect Mustakbil postings
+name: Collect Mustakbil Postings
 
 on:
   schedule:
