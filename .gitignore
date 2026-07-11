@@ -11,3 +11,5 @@ node_modules/
 browser_profile/
 chrome_debug_profile/
 .claude/settings.local.json
+*.html
+output/
