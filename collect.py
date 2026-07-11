@@ -119,6 +119,63 @@ def run_enrich_all(run_id: str) -> None:
     )
 
 
+# Same card selector rozee_parser scopes to (real cards only, skeleton-loader
+# placeholders excluded). NOTE: this must index into the NodeList rather than
+# use a `:first-child`-style pseudo-class -- `:first-child` requires the card
+# to literally be its parent's first DOM child, which fails (silently, no
+# error, just an empty match) whenever anything else precedes it in
+# div.jlist#jobs. That's what produced the earlier "href=None" sentinel: the
+# selector matched nothing at all, not that the card's href was truly absent.
+_FIRST_CARD_HREF_JS = """
+    (() => {
+        const cards = document.querySelectorAll('div.jlist#jobs > div.job');
+        if (!cards.length) return null;
+        const a = cards[0].querySelector('h3.s-18 a[href]');
+        return a ? a.getAttribute('href') : null;
+    })()
+"""
+
+ROZEE_SEARCH_URL_TEMPLATE = "https://www.rozee.pk/job/jsearch/q/data/fpn/{offset}"
+ROZEE_CARDS_PER_PAGE = 20  # verified: fpn/0 and fpn/20 return distinct, non-overlapping card sets
+
+
+def _get_first_card_href(page) -> str | None:
+    try:
+        return page.evaluate(_FIRST_CARD_HREF_JS)
+    except Exception:
+        return None
+
+
+def _wait_for_new_first_card(page, previous_href: str | None, timeout_ms: int = 8000) -> bool:
+    """Block until the first job card's href differs from previous_href, or
+    timeout_ms elapses. Used as the settle condition after each goto() --
+    Rozee's search results are server-rendered, but this still guards
+    against reading the DOM mid-navigation. A timeout here is NOT
+    automatically treated as failure by the caller: for direct fpn/N
+    navigation (unlike the old click-Next approach) a same/unchanged first
+    card can also mean the offset is genuinely past the last page, since
+    Rozee may re-serve the same content rather than erroring. The caller
+    inspects actual page state afterward to tell those apart.
+    """
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    try:
+        page.wait_for_function(
+            """(prev) => {
+                const cards = document.querySelectorAll('div.jlist#jobs > div.job');
+                if (!cards.length) return false;
+                const a = cards[0].querySelector('h3.s-18 a[href]');
+                const href = a ? a.getAttribute('href') : null;
+                return href !== null && href !== prev;
+            }""",
+            arg=previous_href,
+            timeout=timeout_ms,
+        )
+        return True
+    except PlaywrightTimeoutError:
+        return False
+
+
 def run_rozee_live(max_pages: int, run_id: str) -> None:
     from playwright.sync_api import sync_playwright
     from rozee_parser import parse_listing_page
@@ -129,6 +186,8 @@ def run_rozee_live(max_pages: int, run_id: str) -> None:
     all_jobs: list[dict] = []
     pages_fetched = 0
     seen_urls: set[str] = set()
+    stop_reason = "reached max_pages"
+    previous_first_href: str | None = None
 
     with sync_playwright() as p:
         try:
@@ -151,39 +210,59 @@ def run_rozee_live(max_pages: int, run_id: str) -> None:
         logger.info(f"[{run_id}] Connected over CDP. Current URL: {page.url}")
 
         for page_num in range(1, max_pages + 1):
+            offset = (page_num - 1) * ROZEE_CARDS_PER_PAGE
+            url = ROZEE_SEARCH_URL_TEMPLATE.format(offset=offset)
+
+            if page_num > 1:
+                time.sleep(random.uniform(*ROZEE_LIVE_DELAY_RANGE))
+
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as exc:
+                stop_reason = f"navigation to {url} raised an exception: {exc}"
+                break
+
+            # Settle condition, not a hard pass/fail gate -- see docstring.
+            # A timeout here just means we proceed to inspect whatever state
+            # actually loaded, rather than assuming failure outright.
+            _wait_for_new_first_card(page, previous_first_href, timeout_ms=8000)
+
             html = page.content()
             page_jobs = parse_listing_page(html)
+            first_href = _get_first_card_href(page)
+            first_title = page_jobs[0]["title"] if page_jobs else None
+            logger.info(
+                f"[{run_id}] Page {page_num} (fpn/{offset}): first card = {first_title!r} "
+                f"href={first_href!r} ({len(page_jobs)} cards)"
+            )
+
+            if not page_jobs:
+                stop_reason = f"fpn/{offset} returned 0 cards -- genuinely reached the end of results"
+                break
+
+            if page_num > 1 and first_href is not None and first_href == previous_first_href:
+                stop_reason = (
+                    f"fpn/{offset} returned the same first card as the previous offset "
+                    f"-- genuinely reached the end of results (offset beyond available postings)"
+                )
+                break
+
+            previous_first_href = first_href
 
             new_jobs = [j for j in page_jobs if j.get("detail_url") not in seen_urls]
             for j in new_jobs:
                 j["source"] = "rozee"
                 seen_urls.add(j["detail_url"])
 
-            if not new_jobs and page_num > 1:
-                logger.info(f"[{run_id}] Page {page_num}: no new postings, stopping")
-                break
-
             pages_fetched += 1
             all_jobs.extend(new_jobs)
-            logger.info(f"[{run_id}] Page {page_num}/{max_pages}: parsed {len(new_jobs)} new postings")
+            logger.info(f"[{run_id}] Page {page_num}/{max_pages}: parsed {len(page_jobs)} cards, {len(new_jobs)} new")
 
             if page_num == max_pages:
+                stop_reason = "reached max_pages"
                 break
 
-            next_link = page.locator("ul.pagination a.next")
-            if next_link.count() == 0:
-                logger.info(f"[{run_id}] No 'Next' control found, reached the end")
-                break
-
-            try:
-                next_link.first.click()
-                page.wait_for_timeout(2000)
-            except Exception as exc:
-                logger.warning(f"[{run_id}] Failed to click 'Next': {exc}")
-                break
-
-            time.sleep(random.uniform(*ROZEE_LIVE_DELAY_RANGE))
-
+    logger.info(f"[{run_id}] Pagination stopped: {stop_reason}")
     logger.info(f"[{run_id}] Fetched {pages_fetched} pages, parsed {len(all_jobs)} postings")
 
     counts = upsert_postings(all_jobs, run_id=run_id)
