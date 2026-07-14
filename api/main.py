@@ -7,6 +7,7 @@ cache (cache.py) since the underlying data changes at most daily.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import re
 import statistics
@@ -15,6 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 import queries
 from cache import cached
@@ -27,7 +29,10 @@ app = FastAPI(title="Rukhwise API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # frontend domain TBD; tighten once known
-    allow_methods=["GET"],  # read-only service
+    allow_methods=["GET", "POST"],  # read-only service, except /coverage's
+    # POST -- it still performs no writes, POST here is purely because the
+    # request needs a body (a skill list) too large/structured for a query
+    # string.
     allow_headers=["*"],
 )
 
@@ -146,6 +151,190 @@ def _require_known_skill(skill: str, taxonomy: dict) -> dict:
     return spec
 
 
+def _posting_skills_map(
+    mentions: list[dict], taxonomy: dict, include_soft: bool = False
+) -> dict[str, set[str]]:
+    """posting_id -> set of skill keys mentioned, restricted to skills that
+    still exist in the current taxonomy (guards against stale mention rows
+    from a retired skill) and optionally excluding soft-category skills."""
+    skills_meta = taxonomy["skills"]
+    out: dict[str, set[str]] = defaultdict(set)
+    for row in mentions:
+        spec = skills_meta.get(row["skill"])
+        if spec is None:
+            continue
+        if spec["category"] == "soft" and not include_soft:
+            continue
+        out[row["posting_id"]].add(row["skill"])
+    return out
+
+
+def _normalize_company_key(name: str) -> str:
+    """Trim + collapse internal whitespace + case-fold, purely for grouping.
+    Display always uses the most common raw form seen (_company_summary),
+    never this key."""
+    return " ".join(name.split()).casefold()
+
+
+def _skill_company_map(postings: list[dict], mentions: list[dict]) -> dict[str, set[str]]:
+    """skill -> set of normalized company keys among postings that mention
+    it -- the bulk-poster-resistant companion to plain posting_count: a
+    single high-volume employer repeating the same skill list inflates
+    posting_count but not company_count."""
+    posting_company: dict[str, str] = {}
+    for p in postings:
+        if p.get("company"):
+            posting_company[p["id"]] = _normalize_company_key(p["company"])
+    out: dict[str, set[str]] = defaultdict(set)
+    for m in mentions:
+        company_key = posting_company.get(m["posting_id"])
+        if company_key:
+            out[m["skill"]].add(company_key)
+    return out
+
+
+_BULK_THRESHOLD = 0.25
+
+
+def _bulk_company_keys(postings: list[dict]) -> set[str]:
+    """Company (normalized) keys holding > 25% of all postings -- "bulk
+    posters" whose volume can single-handedly manufacture skill/pairing
+    signal that has nothing to do with broader market demand. Always
+    computed against the full, unfiltered posting list passed in, so the
+    threshold doesn't drift if called after some other filtering."""
+    total = len(postings)
+    if total == 0:
+        return set()
+    counts: dict[str, int] = defaultdict(int)
+    for p in postings:
+        if p.get("company"):
+            counts[_normalize_company_key(p["company"])] += 1
+    return {key for key, count in counts.items() if count / total > _BULK_THRESHOLD}
+
+
+def _apply_bulk_exclusion(
+    postings: list[dict], mentions: list[dict], exclude_bulk: bool
+) -> tuple[list[dict], list[dict]]:
+    """When exclude_bulk, drops every posting (and its mentions) from any
+    bulk poster (see _bulk_company_keys) -- a single high-volume employer
+    can otherwise manufacture skill/pairing signal that says more about
+    that one employer's template than about market demand. Bulk-share is
+    always computed against the full corpus passed in here, before any
+    exclusion, so the 25% threshold is stable."""
+    if not exclude_bulk:
+        return postings, mentions
+    bulk_keys = _bulk_company_keys(postings)
+    if not bulk_keys:
+        return postings, mentions
+    filtered_postings = [
+        p for p in postings
+        if not p.get("company") or _normalize_company_key(p["company"]) not in bulk_keys
+    ]
+    valid_ids = {p["id"] for p in filtered_postings}
+    filtered_mentions = [m for m in mentions if m["posting_id"] in valid_ids]
+    return filtered_postings, filtered_mentions
+
+
+def _bucket_is_partial(label: str, granularity: str, today: date) -> bool:
+    """True for the single bucket, if any, representing a period still in
+    progress (today, or this week) -- its count is an undercount by
+    construction and must never be visually compared against a complete
+    bucket in a chart."""
+    bucket_date = date.fromisoformat(label)
+    if granularity == "day":
+        return bucket_date == today
+    current_week_start = today - timedelta(days=today.weekday())
+    return bucket_date == current_week_start
+
+
+def _is_templated_share(subset: list[dict]) -> dict:
+    """Same exact-skill-tagset-duplicate detection as
+    _insight_templated_share below, generalized to an arbitrary posting
+    subset (here, one company's postings) rather than hardcoded to Rozee."""
+    tagsets: dict[str, tuple] = {}
+    for p in subset:
+        sr = p.get("skills_raw")
+        if isinstance(sr, list) and sr:
+            tagsets[p["id"]] = tuple(sorted(sr))
+
+    if not tagsets:
+        return {"tagged_count": 0, "templated_count": 0, "share": None}
+
+    groups: dict[tuple, list[str]] = defaultdict(list)
+    for pid, tagset in tagsets.items():
+        groups[tagset].append(pid)
+
+    templated = sum(len(v) for v in groups.values() if len(v) > 1)
+    return {
+        "tagged_count": len(tagsets),
+        "templated_count": templated,
+        "share": round(templated / len(tagsets), 4),
+    }
+
+
+# --------------------------------------------------------------------------
+# Skill co-occurrence -- shared by /skills/cooccurrence, /skills/{skill}/
+# companions, and two of the insight generators near the bottom of this file.
+# --------------------------------------------------------------------------
+
+_MIN_JOINT_COUNT = 5  # pairs below this are noise, not signal
+
+
+def _compute_skill_cooccurrence(
+    mentions: list[dict], taxonomy: dict, total_postings: int, include_soft: bool = False
+) -> list[dict]:
+    """Every skill pair that co-occurs on >= _MIN_JOINT_COUNT postings, with
+    joint count, both conditional probabilities, and lift.
+
+    P(skill) is defined against `total_postings` (every tracked posting,
+    matching the /skills/top convention) rather than just postings that
+    mention any skill at all -- so these probabilities are directly
+    comparable to share_of_postings elsewhere in the API. Lift = P(A and B)
+    / (P(A) * P(B)): 1.0 means no relationship beyond chance, higher means
+    the pair is demanded together more than base rates would predict.
+    """
+    posting_skills = _posting_skills_map(mentions, taxonomy, include_soft)
+    skill_postings = _skill_postings_map(
+        [
+            m
+            for m in mentions
+            if (spec := taxonomy["skills"].get(m["skill"])) is not None
+            and (include_soft or spec["category"] != "soft")
+        ]
+    )
+
+    joint_counts: Counter[tuple[str, str]] = Counter()
+    for skills in posting_skills.values():
+        for a, b in itertools.combinations(sorted(skills), 2):
+            joint_counts[(a, b)] += 1
+
+    pairs = []
+    for (a, b), joint in joint_counts.items():
+        if joint < _MIN_JOINT_COUNT:
+            continue
+        count_a = len(skill_postings.get(a, ()))
+        count_b = len(skill_postings.get(b, ()))
+        if count_a == 0 or count_b == 0 or total_postings == 0:
+            continue
+        p_a = count_a / total_postings
+        p_b = count_b / total_postings
+        p_joint = joint / total_postings
+        lift = p_joint / (p_a * p_b)
+        pairs.append({
+            "skill_a": a,
+            "display_a": taxonomy["skills"][a]["display"],
+            "skill_b": b,
+            "display_b": taxonomy["skills"][b]["display"],
+            "joint_count": joint,
+            "count_a": count_a,
+            "count_b": count_b,
+            "p_b_given_a": round(joint / count_a, 4),
+            "p_a_given_b": round(joint / count_b, 4),
+            "lift": round(lift, 3),
+        })
+    return pairs
+
+
 # --------------------------------------------------------------------------
 # GET /stats/overview
 # --------------------------------------------------------------------------
@@ -162,6 +351,13 @@ def stats_overview():
     cities = {p["city"] for p in postings if p.get("city")}
     last_seen_values = [p["last_seen_at"] for p in postings if p.get("last_seen_at")]
 
+    company_counts: dict[str, int] = defaultdict(int)
+    for p in postings:
+        if p.get("company"):
+            company_counts[_normalize_company_key(p["company"])] += 1
+    top_company_count = max(company_counts.values(), default=0)
+    top_company_share = round(top_company_count / len(postings), 4) if postings else 0.0
+
     return {
         "total_postings": len(postings),
         "per_source": dict(per_source),
@@ -170,6 +366,11 @@ def stats_overview():
         "distinct_cities": len(cities),
         "last_collection_at": max(last_seen_values) if last_seen_values else None,
         "skill_mention_total": len(mentions),
+        # Concentration disclosure -- the single highest-volume employer's
+        # share of all tracked postings. A single bulk poster can dominate
+        # skill/pairing signal; this makes that risk visible at the top
+        # level rather than requiring a trip to /companies/top to notice it.
+        "top_company_share": top_company_share,
     }
 
 
@@ -182,14 +383,17 @@ def stats_overview():
 def skills_top(
     category: str | None = None,
     include_soft: bool = False,
+    exclude_bulk: bool = False,
     limit: int = Query(default=25, ge=1, le=100),
 ):
     taxonomy = queries.get_taxonomy()
     postings = queries.get_postings()
     mentions = queries.get_skill_mentions()
+    postings, mentions = _apply_bulk_exclusion(postings, mentions, exclude_bulk)
     total_postings = len(postings)
 
     skill_postings = _skill_postings_map(mentions)
+    skill_companies = _skill_company_map(postings, mentions)
 
     rows = []
     for skill_key, spec in taxonomy["skills"].items():
@@ -206,12 +410,21 @@ def skills_top(
             "display": spec["display"],
             "category": skill_cat,
             "posting_count": count,
+            # Distinct companies demanding this skill -- the bulk-poster-
+            # resistant companion to posting_count: a single repeat-poster
+            # inflates the latter but not this.
+            "company_count": len(skill_companies.get(skill_key, ())),
             "share_of_postings": round(count / total_postings, 4) if total_postings else 0.0,
         })
 
     rows.sort(key=lambda r: -r["posting_count"])
     rows = rows[:limit]
-    return {"total_postings": total_postings, "count": len(rows), "skills": rows}
+    return {
+        "total_postings": total_postings,
+        "exclude_bulk": exclude_bulk,
+        "count": len(rows),
+        "skills": rows,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -302,16 +515,24 @@ def _compute_skill_trend(skill: str, granularity: str) -> dict:
     postings = queries.get_postings()
     mentions = queries.get_skill_mentions()
     posting_ids_with_skill = {m["posting_id"] for m in mentions if m["skill"] == skill}
+    company_count = len(_skill_company_map(postings, mentions).get(skill, ()))
 
     dated = [
         (p["id"], _parse_ts(p["first_seen_at"]).date())
         for p in postings if p.get("first_seen_at")
     ]
     if not dated:
-        return {"skill": skill, "display": spec["display"], "granularity": granularity, "buckets": []}
+        return {
+            "skill": skill,
+            "display": spec["display"],
+            "granularity": granularity,
+            "company_count": company_count,
+            "buckets": [],
+        }
 
     dates = [d for _, d in dated]
     labels = _bucket_sequence(min(dates), max(dates), granularity)
+    today = datetime.now(timezone.utc).date()
 
     bucket_totals = Counter()
     bucket_skill_counts = Counter()
@@ -333,6 +554,10 @@ def _compute_skill_trend(skill: str, granularity: str) -> dict:
             # here so any consumer comparing an actual forecast against a
             # baseline gets an honest, trivial-to-beat reference for free.
             "naive_baseline": prev_value,
+            # True only for a bucket still in progress (this week / today).
+            # Its count is an undercount by construction -- charts must
+            # never plot it as if it were comparable to a complete bucket.
+            "is_partial": _bucket_is_partial(label, granularity, today),
         })
         prev_value = value
 
@@ -340,6 +565,7 @@ def _compute_skill_trend(skill: str, granularity: str) -> dict:
         "skill": skill,
         "display": spec["display"],
         "granularity": granularity,
+        "company_count": company_count,
         "buckets": series,
     }
 
@@ -364,14 +590,103 @@ def skills_compare(a: str, b: str, granularity: str = Query(default="week", patt
 
 
 # --------------------------------------------------------------------------
+# GET /skills/cooccurrence, GET /skills/{skill}/companions
+# --------------------------------------------------------------------------
+
+@app.get("/skills/cooccurrence")
+@cached()
+def skills_cooccurrence(
+    include_soft: bool = False,
+    exclude_bulk: bool = False,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    taxonomy = queries.get_taxonomy()
+    postings = queries.get_postings()
+    mentions = queries.get_skill_mentions()
+    postings, mentions = _apply_bulk_exclusion(postings, mentions, exclude_bulk)
+
+    pairs = _compute_skill_cooccurrence(mentions, taxonomy, len(postings), include_soft)
+    pairs.sort(key=lambda p: -p["joint_count"])
+    pairs = pairs[:limit]
+
+    return {
+        "total_postings": len(postings),
+        "min_joint_count": _MIN_JOINT_COUNT,
+        "exclude_bulk": exclude_bulk,
+        "count": len(pairs),
+        "pairs": pairs,
+    }
+
+
+@app.get("/skills/{skill}/companions")
+@cached()
+def skill_companions(
+    skill: str,
+    include_soft: bool = False,
+    exclude_bulk: bool = False,
+    limit: int = Query(default=10, ge=1, le=50),
+):
+    taxonomy = queries.get_taxonomy()
+    _require_known_skill(skill, taxonomy)
+    postings = queries.get_postings()
+    mentions = queries.get_skill_mentions()
+    postings, mentions = _apply_bulk_exclusion(postings, mentions, exclude_bulk)
+
+    pairs = _compute_skill_cooccurrence(mentions, taxonomy, len(postings), include_soft)
+    companions = []
+    for p in pairs:
+        if p["skill_a"] == skill:
+            companions.append({
+                "skill": p["skill_b"],
+                "display": p["display_b"],
+                "joint_count": p["joint_count"],
+                "p_companion_given_skill": p["p_b_given_a"],
+                "p_skill_given_companion": p["p_a_given_b"],
+                "lift": p["lift"],
+            })
+        elif p["skill_b"] == skill:
+            companions.append({
+                "skill": p["skill_a"],
+                "display": p["display_a"],
+                "joint_count": p["joint_count"],
+                "p_companion_given_skill": p["p_a_given_b"],
+                "p_skill_given_companion": p["p_b_given_a"],
+                "lift": p["lift"],
+            })
+
+    # "Most likely to be demanded alongside it" is literally P(companion |
+    # skill) -- ranked by that, not by lift, so a ubiquitous but genuinely
+    # frequent companion outranks a rarer but more "surprising" one.
+    companions.sort(key=lambda c: -c["p_companion_given_skill"])
+    companions = companions[:limit]
+
+    return {
+        "skill": skill,
+        "display": taxonomy["skills"][skill]["display"],
+        "exclude_bulk": exclude_bulk,
+        "count": len(companions),
+        "companions": companions,
+    }
+
+
+# --------------------------------------------------------------------------
 # GET /salaries/summary
 # --------------------------------------------------------------------------
 
 @app.get("/salaries/summary")
 @cached()
-def salaries_summary(currency: str = "PKR"):
+def salaries_summary(currency: str = "PKR", skill: str | None = None):
+    taxonomy = queries.get_taxonomy()
+    if skill:
+        _require_known_skill(skill, taxonomy)
+
     postings = queries.get_postings()
     relevant = [p for p in postings if (p.get("currency") or "PKR") == currency]
+
+    if skill:
+        mentions = queries.get_skill_mentions()
+        posting_ids = {m["posting_id"] for m in mentions if m["skill"] == skill}
+        relevant = [p for p in relevant if p["id"] in posting_ids]
 
     with_salary = [(p, _posting_salary_point(p)) for p in relevant]
     with_salary = [(p, v) for p, v in with_salary if v is not None]
@@ -392,6 +707,7 @@ def salaries_summary(currency: str = "PKR"):
 
     return {
         "currency": currency,
+        "skill": skill,
         "overall": overall,
         "by_experience_band": by_band,
         "note": (
@@ -401,6 +717,289 @@ def salaries_summary(currency: str = "PKR"):
             "midpoint of (salary_min, salary_max) when both are present, else "
             "whichever one is."
         ),
+    }
+
+
+# --------------------------------------------------------------------------
+# POST /coverage
+#
+# Redesigned around the question a job seeker actually asks -- "how many
+# jobs am I a strong candidate for," an absolute count -- rather than the
+# economist's-eye-view percentage the first version led with. Percentages
+# still exist, demoted to a `stats` footnote.
+# --------------------------------------------------------------------------
+
+class CoverageRequest(BaseModel):
+    skills: list[str]
+
+
+_STRONG_MATCH_THRESHOLD = 0.7
+_STRONG_MATCH_POSTINGS_SHOWN = 50
+
+
+@app.post("/coverage")
+@cached()
+def coverage(payload: CoverageRequest, exclude_bulk: bool = False):
+    taxonomy = queries.get_taxonomy()
+    skills_meta = taxonomy["skills"]
+
+    unknown = sorted({s for s in payload.skills if s not in skills_meta})
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown skills: {unknown}")
+
+    # A posting is never considered to require a soft skill in this
+    # computation (see technical_postings below), so soft entries in the
+    # input are silently excluded from the working set rather than rejected
+    # -- they're valid taxonomy skills, just not ones "match strength" is
+    # about.
+    user_skills = {s for s in payload.skills if skills_meta[s]["category"] != "soft"}
+    ignored_soft = sorted(set(payload.skills) - user_skills)
+
+    postings = queries.get_postings()
+    mentions = queries.get_skill_mentions()
+    postings, mentions = _apply_bulk_exclusion(postings, mentions, exclude_bulk)
+    postings_by_id = {p["id"]: p for p in postings}
+
+    posting_skills = _posting_skills_map(mentions, taxonomy, include_soft=False)
+
+    # Denominator: postings with at least one recognized technical skill
+    # mention. A posting with zero technical mentions has no match-strength
+    # question to answer -- it would trivially read as "100% covered" by an
+    # empty requirement set, which is meaningless, so it's excluded rather
+    # than counted as a free win.
+    technical_postings = {pid: skills for pid, skills in posting_skills.items() if skills}
+    total = len(technical_postings)
+
+    strong_match_ids: list[str] = []
+    full_matched = 0
+    delta_counter: Counter[str] = Counter()
+
+    for pid, skills in technical_postings.items():
+        covered = skills & user_skills
+        missing = skills - user_skills
+        current_fraction = len(covered) / len(skills)
+
+        if not missing:
+            full_matched += 1
+        if current_fraction >= _STRONG_MATCH_THRESHOLD:
+            strong_match_ids.append(pid)
+            continue  # already strong -- not eligible for "unlock" credit
+
+        # Would learning exactly one more skill push this posting from
+        # below-threshold to a strong match? Any one of its missing skills
+        # raises covered-by-exactly-one, so a posting sitting right at the
+        # boundary credits every one of its missing skills, not just one --
+        # each of them really would, on its own, cross the line.
+        new_fraction = (len(covered) + 1) / len(skills)
+        if new_fraction >= _STRONG_MATCH_THRESHOLD:
+            for skill_key in missing:
+                delta_counter[skill_key] += 1
+
+    strong_match_ids.sort(key=lambda pid: postings_by_id[pid].get("first_seen_at") or "", reverse=True)
+    strong_count = len(strong_match_ids)
+
+    strong_match_postings = [
+        {
+            "title": postings_by_id[pid].get("title"),
+            "company": postings_by_id[pid].get("company"),
+            "city": postings_by_id[pid].get("city"),
+            "detail_url": postings_by_id[pid].get("detail_url"),
+        }
+        for pid in strong_match_ids[:_STRONG_MATCH_POSTINGS_SHOWN]
+    ]
+
+    delta_ranking = [
+        {
+            "skill": skill_key,
+            "display": skills_meta[skill_key]["display"],
+            "additional_strong_matches_if_added": count,
+        }
+        for skill_key, count in delta_counter.most_common(10)
+    ]
+
+    strong_pct = round(strong_count / total * 100, 1) if total else 0.0
+    full_pct = round(full_matched / total * 100, 1) if total else 0.0
+
+    return {
+        "input_skills": sorted(user_skills),
+        "ignored_soft_skills": ignored_soft,
+        "exclude_bulk": exclude_bulk,
+        "total_postings_considered": total,
+        "strong_matches": {
+            "count": strong_count,
+            "postings_shown": len(strong_match_postings),
+            "postings": strong_match_postings,
+        },
+        "full_matches": {"count": full_matched},
+        "delta_ranking": delta_ranking,
+        "stats": {
+            "strong_match_percent": strong_pct,
+            "full_match_percent": full_pct,
+        },
+        "note": (
+            "A 'strong match' is a posting, among those with at least one "
+            "taxonomy-recognized technical (non-soft) skill mention, where "
+            "your skill set covers 70% or more of what it asks for -- this "
+            "is the headline count above, and is meant to answer 'how many "
+            "jobs am I a strong candidate for,' not an economy-wide share. "
+            "A 'full match' additionally requires covering every technical "
+            "skill the posting mentions, no exceptions; every full match is "
+            "also a strong match. Up to 50 strong-match postings are listed, "
+            "most recent first, out of the true count above. Postings with "
+            "zero recognized technical skill mentions are excluded from the "
+            "denominator entirely -- they have no match-strength question "
+            "to answer. The delta ranking simulates learning exactly one "
+            "more skill at a time: for each candidate not already in your "
+            "set, it counts postings currently below the 70% threshold that "
+            "would cross it the moment you learned that one skill. "
+            "Percentages, where shown, are in `stats` and are secondary to "
+            "the counts above."
+        ),
+    }
+
+
+# --------------------------------------------------------------------------
+# GET /companies/top, GET /companies/{name}
+# --------------------------------------------------------------------------
+
+def _company_summary(
+    postings_subset: list[dict], mentions: list[dict], taxonomy: dict, include_soft: bool
+) -> dict:
+    raw_names = Counter(p["company"] for p in postings_subset if p.get("company"))
+    display_name = raw_names.most_common(1)[0][0] if raw_names else "Unknown"
+
+    posting_ids = {p["id"] for p in postings_subset}
+    cities = sorted({
+        p["city"].strip().title() for p in postings_subset if p.get("city") and p["city"].strip()
+    })
+
+    relevant_mentions = [m for m in mentions if m["posting_id"] in posting_ids]
+    skill_counts: Counter[str] = Counter()
+    skill_display: dict[str, str] = {}
+    for m in relevant_mentions:
+        spec = taxonomy["skills"].get(m["skill"])
+        if spec is None:
+            continue
+        if spec["category"] == "soft" and not include_soft:
+            continue
+        skill_counts[m["skill"]] += 1
+        skill_display[m["skill"]] = spec["display"]
+
+    top_skills = [
+        {"skill": s, "display": skill_display[s], "count": c}
+        for s, c in skill_counts.most_common(5)
+    ]
+
+    pkr_postings = [p for p in postings_subset if (p.get("currency") or "PKR") == "PKR"]
+    salary_values = [v for v in (_posting_salary_point(p) for p in pkr_postings) if v is not None]
+    salary_pkr = _median_iqr(salary_values)
+
+    return {
+        "company": display_name,
+        "posting_count": len(postings_subset),
+        "cities": cities,
+        "top_skills": top_skills,
+        "salary_pkr": salary_pkr,
+        "templated": _is_templated_share(postings_subset),
+    }
+
+
+@app.get("/companies/top")
+@cached()
+def companies_top(include_soft: bool = False, limit: int = Query(default=25, ge=1, le=100)):
+    postings = queries.get_postings()
+    mentions = queries.get_skill_mentions()
+    taxonomy = queries.get_taxonomy()
+
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for p in postings:
+        if p.get("company"):
+            grouped[_normalize_company_key(p["company"])].append(p)
+
+    summaries = [
+        _company_summary(subset, mentions, taxonomy, include_soft) for subset in grouped.values()
+    ]
+    summaries.sort(key=lambda c: -c["posting_count"])
+    summaries = summaries[:limit]
+
+    return {"count": len(summaries), "companies": summaries}
+
+
+@app.get("/companies/{name:path}")
+@cached()
+def company_detail(
+    name: str, include_soft: bool = False, recent_limit: int = Query(default=20, ge=1, le=100)
+):
+    postings = queries.get_postings()
+    mentions = queries.get_skill_mentions()
+    taxonomy = queries.get_taxonomy()
+
+    key = _normalize_company_key(name)
+    subset = [p for p in postings if p.get("company") and _normalize_company_key(p["company"]) == key]
+    if not subset:
+        raise HTTPException(status_code=404, detail=f"No postings found for company '{name}'")
+
+    summary = _company_summary(subset, mentions, taxonomy, include_soft)
+
+    posting_skills = defaultdict(list)
+    for m in mentions:
+        posting_skills[m["posting_id"]].append(m["skill"])
+
+    recent = sorted(subset, key=lambda p: p.get("first_seen_at") or "", reverse=True)[:recent_limit]
+    summary["recent_postings"] = [
+        {
+            "title": p.get("title"),
+            "city": p.get("city"),
+            "posting_date": p.get("posting_date"),
+            "source": p.get("source"),
+            "detail_url": p.get("detail_url"),
+            "skills": sorted(posting_skills.get(p["id"], [])),
+        }
+        for p in recent
+    ]
+    return summary
+
+
+# --------------------------------------------------------------------------
+# GET /postings/foreign-currency
+# --------------------------------------------------------------------------
+
+@app.get("/postings/foreign-currency")
+@cached()
+def postings_foreign_currency():
+    postings = queries.get_postings()
+    mentions = queries.get_skill_mentions()
+    taxonomy = queries.get_taxonomy()
+
+    foreign = [p for p in postings if p.get("currency") and p["currency"] != "PKR"]
+    posting_skills = _posting_skills_map(mentions, taxonomy, include_soft=False)
+
+    breakout: Counter[str] = Counter()
+    rows = []
+    for p in foreign:
+        skills = sorted(posting_skills.get(p["id"], ()))
+        for s in skills:
+            breakout[s] += 1
+        rows.append({
+            "currency": p["currency"],
+            "salary_min": p.get("salary_min"),
+            "salary_max": p.get("salary_max"),
+            "title": p.get("title"),
+            "company": p.get("company"),
+            "city": p.get("city"),
+            "detail_url": p.get("detail_url"),
+            "skills": skills,
+        })
+
+    breakout_stack = [
+        {"skill": s, "display": taxonomy["skills"][s]["display"], "count": c}
+        for s, c in breakout.most_common()
+    ]
+
+    return {
+        "count": len(rows),
+        "postings": rows,
+        "breakout_stack": breakout_stack,
     }
 
 
@@ -417,17 +1016,36 @@ def salaries_summary(currency: str = "PKR"):
 # --------------------------------------------------------------------------
 
 def _insight_top_mover(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
-    """(a) Skill with the biggest week-over-week posting-count change."""
+    """(a) Skill with the biggest week-over-week posting-count change.
+
+    Guarded against the in-progress week: only ever compares the two most
+    recently COMPLETE calendar weeks (never the still-forming current week
+    against a full one), and refuses to activate at all until at least 3
+    complete weeks of history exist -- so the "previous" week in the
+    comparison is never itself the very first, possibly-partial week of
+    collection.
+
+    Audit note: every other generator in this file was checked for the same
+    partial-bucket vulnerability. None of the others compare across
+    calendar-time buckets the way this one does -- they're all either
+    static snapshots (dominance ratio, foreign currency, zero-technical,
+    strongest pairing, top companion, top company) or scrape-run membership
+    checks (posting lifespan), not week-over-week deltas, so this guard is
+    the only one needed.
+    """
     dated = [(p["id"], _parse_ts(p["first_seen_at"]).date()) for p in postings if p.get("first_seen_at")]
     if not dated:
         return None
 
-    week_of = {pid: d - timedelta(days=d.weekday()) for pid, d in dated}
-    distinct_weeks = sorted(set(week_of.values()))
-    if len(distinct_weeks) < 2:
-        return None  # not enough calendar weeks of data to compare yet
+    today = datetime.now(timezone.utc).date()
+    current_week_start = today - timedelta(days=today.weekday())
 
-    last_week, prev_week = distinct_weeks[-1], distinct_weeks[-2]
+    week_of = {pid: d - timedelta(days=d.weekday()) for pid, d in dated}
+    complete_weeks = sorted({w for w in week_of.values() if w < current_week_start})
+    if len(complete_weeks) < 3:
+        return None  # not enough complete weeks of history to trust a comparison
+
+    last_week, prev_week = complete_weeks[-1], complete_weeks[-2]
     skill_postings = _skill_postings_map(mentions)
 
     best = None  # (skill_key, delta, cur, prev)
@@ -448,7 +1066,7 @@ def _insight_top_mover(postings: list[dict], mentions: list[dict], taxonomy: dic
         "headline": f"{display} postings moved {direction} by {abs(delta)} week-over-week",
         "detail": (
             f"{display} appeared in {cur} postings first seen the week of {last_week} "
-            f"vs {prev} the week of {prev_week}."
+            f"vs {prev} the week of {prev_week} -- both complete calendar weeks."
         ),
         "value": {"skill": skill_key, "current_week": cur, "previous_week": prev, "delta": delta},
         "computed_at": datetime.now(timezone.utc).isoformat(),
@@ -634,12 +1252,126 @@ def _insight_zero_technical(postings: list[dict], mentions: list[dict], taxonomy
     }
 
 
+def _insight_strongest_pairing(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
+    """(g) Highest-lift skill pair this period -- the two skills demanded
+    together far more than their individual base rates would predict.
+
+    Phrasing guard: lift explodes for rare skills (two skills each mentioned
+    a handful of times can produce a 50x+ lift from pure small-sample noise),
+    so below a joint_count of 15 the headline leads with the plain count,
+    never the multiplier -- the multiplier is still reported in `value` for
+    anyone who wants it, just not foregrounded in prose."""
+    pairs = _compute_skill_cooccurrence(mentions, taxonomy, len(postings), include_soft=False)
+    if not pairs:
+        return None
+
+    best = max(pairs, key=lambda p: p["lift"])
+    if best["joint_count"] < 15:
+        headline = (
+            f"{best['display_a']} and {best['display_b']} appear together in "
+            f"{best['joint_count']} postings so far"
+        )
+        detail = (
+            f"A small but consistent pairing -- {best['lift']:.1f}x above chance -- though the "
+            f"sample ({best['joint_count']} postings) is still thin enough to watch, not trust yet."
+        )
+    else:
+        headline = f"{best['display_a']} and {best['display_b']} are the strongest skill pairing right now"
+        detail = (
+            f"{best['joint_count']} postings mention both -- {best['lift']:.1f}x more often than "
+            f"chance alone would predict if the two skills were demanded independently."
+        )
+
+    return {
+        "headline": headline,
+        "detail": detail,
+        "value": {
+            "skill_a": best["skill_a"],
+            "skill_b": best["skill_b"],
+            "joint_count": best["joint_count"],
+            "lift": best["lift"],
+        },
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+        "score": best["lift"],
+    }
+
+
+def _insight_top_skill_companion(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
+    """(h) Most demanded companion of the single most-mentioned technical
+    skill -- "employers asking for X also ask for Y", applied to whichever
+    X currently leads the market."""
+    technical_mentions = [
+        m for m in mentions
+        if (spec := taxonomy["skills"].get(m["skill"])) is not None and spec["category"] != "soft"
+    ]
+    skill_postings = _skill_postings_map(technical_mentions)
+    if not skill_postings:
+        return None
+
+    top_skill = max(skill_postings, key=lambda s: len(skill_postings[s]))
+    pairs = _compute_skill_cooccurrence(mentions, taxonomy, len(postings), include_soft=False)
+
+    companions = []
+    for p in pairs:
+        if p["skill_a"] == top_skill:
+            companions.append((p["skill_b"], p["display_b"], p["p_b_given_a"], p["joint_count"]))
+        elif p["skill_b"] == top_skill:
+            companions.append((p["skill_a"], p["display_a"], p["p_a_given_b"], p["joint_count"]))
+    if not companions:
+        return None
+
+    companion_skill, companion_display, p_given, joint = max(companions, key=lambda c: c[2])
+    top_display = taxonomy["skills"][top_skill]["display"]
+
+    return {
+        "headline": f"Employers asking for {top_display} most often also ask for {companion_display}",
+        "detail": (
+            f"{round(p_given * 100)}% of postings mentioning {top_display} also mention "
+            f"{companion_display} ({joint} postings)."
+        ),
+        "value": {
+            "skill": top_skill,
+            "companion": companion_skill,
+            "p_companion_given_skill": p_given,
+            "joint_count": joint,
+        },
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+        "score": p_given * 100,
+    }
+
+
+def _insight_top_company(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
+    """(i) Top hiring company by distinct posting count."""
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for p in postings:
+        if p.get("company"):
+            grouped[_normalize_company_key(p["company"])].append(p)
+    if not grouped:
+        return None
+
+    _, subset = max(grouped.items(), key=lambda kv: len(kv[1]))
+    if len(subset) < 3:
+        return None  # a "top company" with one or two postings isn't noteworthy
+
+    display_name = Counter(p["company"] for p in subset).most_common(1)[0][0]
+    return {
+        "headline": f"{display_name} is the most active hirer tracked right now",
+        "detail": f"{len(subset)} distinct postings from {display_name} across the tracked window.",
+        "value": {"company": display_name, "posting_count": len(subset)},
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+        "score": len(subset),
+    }
+
+
 _INSIGHT_GENERATORS = [
     _insight_top_mover,
     _insight_templated_share,
     _insight_posting_lifespan,
     _insight_dominance_ratio,
     _insight_foreign_currency,
+    _insight_strongest_pairing,
+    _insight_top_skill_companion,
+    _insight_top_company,
     _insight_zero_technical,
 ]
 
@@ -734,7 +1466,10 @@ def root():
         "service": "rukhwise-api",
         "endpoints": [
             "/stats/overview", "/skills/top", "/skills/{skill}/trend", "/skills/compare",
-            "/postings/recent", "/cities/breakdown", "/salaries/summary",
+            "/skills/cooccurrence", "/skills/{skill}/companions",
+            "/postings/recent", "/postings/foreign-currency",
+            "/cities/breakdown", "/salaries/summary", "/coverage",
+            "/companies/top", "/companies/{name}",
             "/insights/live", "/system/health",
         ],
     }

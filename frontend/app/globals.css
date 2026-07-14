@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+/*
+  Rukhwise palette — exact, no derived tints beyond what's specified.
+  Registers alternate at the SECTION level (cream vs java), never mixed
+  within one surface. Sceptre red is the one signal color: alerts, movers,
+  emphasis, never decoration. Cerulean is its calm counterpart in charts.
+*/
+@theme {
+  --color-cream: #f5efc6;
+  --color-java: #231815;
+  --color-soil: #4a2e27;
+  --color-sceptre: #4d0e12;
+  --color-sceptre-bright: #8b1a22;
+  --color-cerulean: #a5bcd6;
+
+  --font-display: var(--font-fraunces);
+  --font-sans: var(--font-dm-sans);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+body {
+  background: var(--color-cream);
+  color: var(--color-java);
+  font-family: var(--font-sans);
+}
+
+/* Tabular figures everywhere numbers appear as data, not prose. */
+.font-mono,
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--color-sceptre);
+  color: var(--color-cream);
+}
