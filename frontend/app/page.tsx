@@ -1,7 +1,7 @@
 import { Section } from "@/components/Section";
 import { Footer } from "@/components/Footer";
 import { Hero } from "@/components/sections/Hero";
-import InkFlowBackground from "@/components/ui/ink-flow-background";
+import { FlowField } from "@/components/FlowField";
 import { InsightStrip } from "@/components/sections/InsightStrip";
 import { DoorwayPanel } from "@/components/DoorwayPanel";
 import { isResearcherInsight } from "@/lib/insights";
@@ -24,19 +24,7 @@ export default async function HomePage() {
 
   return (
     <main>
-      <Section
-        register="cream"
-        backdrop={
-          <InkFlowBackground
-            color="#231815"
-            backgroundColor="#f5efc6"
-            trailOpacity={0.035}
-            particleCount={220}
-            speed={0.45}
-            maxParticleOpacity={0.15}
-          />
-        }
-      >
+      <Section register="cream" backdrop={<FlowField density="hero" />}>
         <Hero
           totalPostings={stats.total_postings}
           skillsMonitored={skillsAll.count}

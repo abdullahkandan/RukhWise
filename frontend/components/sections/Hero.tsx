@@ -1,4 +1,5 @@
 import { CountUp } from "../CountUp";
+import { TypewriterTagline } from "../TypewriterTagline";
 
 interface HeroProps {
   totalPostings: number;
@@ -19,10 +20,7 @@ export function Hero({ totalPostings, skillsMonitored, hoursSinceCollection }: H
           Rukhwise
         </p>
 
-        <h1 className="mt-6 max-w-3xl font-display text-4xl font-medium leading-[1.08] tracking-tight sm:text-5xl md:text-6xl text-balance">
-          Pakistan&rsquo;s job market,{" "}
-          <span className="italic">measured</span>, not guessed.
-        </h1>
+        <TypewriterTagline />
 
         <div className="mt-16 grid grid-cols-1 gap-10 sm:grid-cols-3 sm:gap-6 md:mt-20">
           <div>

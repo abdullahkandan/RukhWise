@@ -53,3 +53,20 @@ body {
   background: var(--color-sceptre);
   color: var(--color-cream);
 }
+
+/* Typewriter caret: two hard on/off blinks, then held opaque until the
+   component fades it out via opacity + transition-opacity. */
+@keyframes caret-blink-twice {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  25%,
+  75% {
+    opacity: 0;
+  }
+}
+
+.animate-caret-blink-twice {
+  animation: caret-blink-twice 1s steps(1, end) 1;
+}
