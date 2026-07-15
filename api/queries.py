@@ -10,7 +10,15 @@ could write). See the RLS SQL printed by this module's __main__ block.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+# Same reasoning as main.py: makes `from cache import cached` resolve
+# whether this module is loaded as top-level `queries` or as `api.queries`.
+# A no-op in the common case (main.py already put this directory on
+# sys.path before importing queries), but keeps this module independently
+# runnable too -- e.g. `python -m api.queries` for the RLS SQL printout.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import yaml
 from dotenv import load_dotenv

@@ -9,10 +9,20 @@ from __future__ import annotations
 
 import itertools
 import logging
+import os
 import re
 import statistics
+import sys
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+# Makes `import queries` / `from cache import cached` below resolve
+# regardless of how this module was invoked -- `cd api && uvicorn main:app`
+# (cwd already on sys.path) or `uvicorn api.main:app` from the repo root
+# (cwd is the repo root, this file's own directory is not otherwise on
+# sys.path). Must run before the local imports just below.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,9 +36,12 @@ logger = logging.getLogger("rukhwise_api")
 
 app = FastAPI(title="Rukhwise API", version="0.1.0")
 
+_allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000")
+ALLOWED_ORIGINS = [origin.strip() for origin in _allowed_origins_env.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # frontend domain TBD; tighten once known
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET", "POST"],  # read-only service, except /coverage's
     # POST -- it still performs no writes, POST here is purely because the
     # request needs a body (a skill list) too large/structured for a query
