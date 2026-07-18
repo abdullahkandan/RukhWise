@@ -445,3 +445,68 @@ export interface SystemHealth {
 export function getSystemHealth() {
   return apiFetch<SystemHealth>("/system/health");
 }
+
+// ---------------------------------------------------------------------------
+// /forecasts/pending
+// ---------------------------------------------------------------------------
+
+export type ForecastTargetType = "volume" | "skill";
+
+export interface PendingForecast {
+  target_type: ForecastTargetType;
+  target_key: string;
+  display: string;
+  target_week_start: string;
+  model_version: string;
+  predicted: number;
+  interval_low: number;
+  interval_high: number;
+  baseline_predicted: number;
+  created_at: string;
+  run_id: string;
+}
+
+export interface ForecastsPendingResponse {
+  count: number;
+  forecasts: PendingForecast[];
+}
+
+export function getForecastsPending() {
+  return apiFetch<ForecastsPendingResponse>("/forecasts/pending");
+}
+
+// ---------------------------------------------------------------------------
+// /forecasts/accuracy
+// ---------------------------------------------------------------------------
+
+export interface GradedForecast {
+  target_type: ForecastTargetType;
+  target_key: string;
+  display: string;
+  target_week_start: string;
+  model_version: string;
+  predicted: number;
+  baseline_predicted: number;
+  actual: number;
+  abs_error: number;
+  baseline_abs_error: number;
+  beat_baseline: boolean;
+  pct_error: number | null;
+  graded_at: string;
+}
+
+export interface ForecastsAccuracySummary {
+  count_graded: number;
+  mae_overall: number | null;
+  beat_baseline_rate_overall: number | null;
+  beat_baseline_rate_by_type: Record<string, number>;
+}
+
+export interface ForecastsAccuracyResponse {
+  forecasts: GradedForecast[];
+  summary: ForecastsAccuracySummary;
+}
+
+export function getForecastsAccuracy() {
+  return apiFetch<ForecastsAccuracyResponse>("/forecasts/accuracy");
+}

@@ -57,20 +57,12 @@ alter table postings add column if not exists category text;
 alter table postings add column if not exists currency text;
 """
 
-FORECASTS_TABLE_SQL = """\
-create table if not exists forecasts (
-    id uuid primary key default gen_random_uuid(),
-    created_at timestamptz default now(),
-    target_metric text not null,
-    target_period_start date,
-    target_period_end date,
-    predicted_value numeric,
-    model_version text,
-    actual_value numeric,
-    graded_at timestamptz,
-    error numeric
-);
-"""
+# The forecasts table's real schema/trigger/RLS lives in the dedicated
+# migration SQL forecast.py's module docstring points to (output once,
+# reviewed, and run by hand in the Supabase SQL editor -- forecasting
+# needs an immutability trigger and a bigint PK, not the uuid/if-not-exists
+# pattern the rest of this module uses for postings/skill_mentions).
+# Nothing ever wrote through the old placeholder schema this replaced.
 
 SKILL_MENTIONS_TABLE_SQL = """\
 create table if not exists skill_mentions (
@@ -214,7 +206,6 @@ $$;
 
 ALL_SQL = "\n".join([
     POSTINGS_TABLE_SQL,
-    FORECASTS_TABLE_SQL,
     SKILL_MENTIONS_TABLE_SQL,
     DROP_OLD_UPSERT_FUNCTION_SQL,
     UPSERT_FUNCTION_SQL,
@@ -520,6 +511,148 @@ def store_skill_mentions(mentions: list[dict], extraction_method: str) -> dict:
         f"(extraction_method={extraction_method})"
     )
     return {"inserted": inserted, "skipped": skipped, "failed": failed}
+
+
+# --------------------------------------------------------------------------
+# Forecasting (forecast.py) -- reads needed to compute weekly actuals/
+# history, plus the forecasts table's own writes. Uses the same service-role
+# client as everything else in this module (forecasts RLS is public-read,
+# service-role-write only -- see the migration SQL forecast.py points to).
+# --------------------------------------------------------------------------
+
+def get_postings_for_forecast() -> list[dict]:
+    """id, source, company, first_seen_at for every posting -- what
+    forecast.py needs to bucket into PKT weeks and count, per source, with
+    the bulk poster excluded where its methodology calls for that."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("postings")
+            .select("id,source,company,first_seen_at")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def get_skill_mentions_for_forecast() -> list[dict]:
+    """posting_id, skill for every skill_mentions row."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("skill_mentions")
+            .select("posting_id,skill")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def insert_forecasts(rows: list[dict]) -> dict:
+    """Insert new forecast rows (the --predict step). Each row needs:
+    run_id, model_version, target_type, target_key, target_week_start,
+    predicted, interval_low, interval_high, baseline_predicted.
+
+    Upsert-safe via the table's own unique constraint on (model_version,
+    target_type, target_key, target_week_start): an existing row is left
+    alone entirely (ignore_duplicates), never overwritten -- the
+    immutability trigger would reject an overwrite attempt anyway, but this
+    avoids even trying. Supabase's upsert only returns the rows it actually
+    inserted, which is how the caller finds out exactly which ones were new
+    (to print only those, not ones silently skipped as already-logged).
+
+    Returns {"inserted": int, "skipped": int, "failed": int,
+    "inserted_rows": list[dict]}.
+    """
+    if not rows:
+        return {"inserted": 0, "skipped": 0, "failed": 0, "inserted_rows": []}
+
+    client = _get_client()
+    inserted = 0
+    skipped = 0
+    failed = 0
+    inserted_rows: list[dict] = []
+
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = rows[i : i + _BATCH_SIZE]
+        try:
+            result = (
+                client.table("forecasts")
+                .upsert(
+                    batch,
+                    on_conflict="model_version,target_type,target_key,target_week_start",
+                    ignore_duplicates=True,
+                )
+                .execute()
+            )
+            returned = result.data or []
+            inserted += len(returned)
+            skipped += len(batch) - len(returned)
+            inserted_rows.extend(returned)
+        except Exception as exc:
+            logger.error(f"Batch forecasts insert failed ({len(batch)} rows): {exc}")
+            failed += len(batch)
+
+    logger.info(f"insert_forecasts: inserted={inserted} skipped={skipped} failed={failed}")
+    return {"inserted": inserted, "skipped": skipped, "failed": failed, "inserted_rows": inserted_rows}
+
+
+def get_ungraded_forecasts(target_week_start: str) -> list[dict]:
+    """Every forecasts row for one target week (ISO date string) still
+    awaiting grading (graded_at is null) -- the --grade step's input.
+    Scoping to one specific week here, rather than "all ungraded rows", is
+    what makes --grade only ever touch the most recent complete week its
+    caller computed; it never reaches back into an older backlog."""
+    client = _get_client()
+    res = (
+        client.table("forecasts")
+        .select("id,target_type,target_key,target_week_start,predicted,baseline_predicted,model_version")
+        .eq("target_week_start", target_week_start)
+        .is_("graded_at", "null")
+        .execute()
+    )
+    return res.data or []
+
+
+def grade_forecast_row(
+    row_id: int,
+    actual: float,
+    graded_at: str,
+    abs_error: float,
+    baseline_abs_error: float,
+    beat_baseline: bool,
+) -> bool:
+    """Fill the five grading columns on one forecasts row. Only ever
+    touches those five columns, so the immutability trigger's "locked
+    fields changed" check always passes here by construction; the trigger
+    still independently enforces grade-once (old.graded_at is not null)."""
+    client = _get_client()
+    try:
+        client.table("forecasts").update({
+            "actual": actual,
+            "graded_at": graded_at,
+            "abs_error": abs_error,
+            "baseline_abs_error": baseline_abs_error,
+            "beat_baseline": beat_baseline,
+        }).eq("id", row_id).execute()
+        return True
+    except Exception as exc:
+        logger.error(f"Failed to grade forecasts row id={row_id}: {exc}")
+        return False
 
 
 if __name__ == "__main__":

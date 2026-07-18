@@ -1470,6 +1470,106 @@ def system_health():
 
 
 # --------------------------------------------------------------------------
+# GET /forecasts/pending, GET /forecasts/accuracy
+# --------------------------------------------------------------------------
+
+def _forecast_display(target_type: str, target_key: str, taxonomy: dict) -> str:
+    if target_type == "volume":
+        return "All postings (Mustakbil)"
+    spec = taxonomy["skills"].get(target_key)
+    return spec["display"] if spec else target_key
+
+
+@app.get("/forecasts/pending")
+@cached()
+def forecasts_pending():
+    """Ungraded forecasts for the current/future weeks -- whatever's been
+    logged by --predict but hasn't had its target week complete yet."""
+    taxonomy = queries.get_taxonomy()
+    forecasts = queries.get_forecasts()
+    pending = [f for f in forecasts if f.get("graded_at") is None]
+    pending.sort(key=lambda f: (f["target_week_start"], f["target_type"], f["target_key"]))
+
+    rows = [
+        {
+            "target_type": f["target_type"],
+            "target_key": f["target_key"],
+            "display": _forecast_display(f["target_type"], f["target_key"], taxonomy),
+            "target_week_start": f["target_week_start"],
+            "model_version": f["model_version"],
+            "predicted": f["predicted"],
+            "interval_low": f["interval_low"],
+            "interval_high": f["interval_high"],
+            "baseline_predicted": f["baseline_predicted"],
+            "created_at": f["created_at"],
+            "run_id": f["run_id"],
+        }
+        for f in pending
+    ]
+
+    return {"count": len(rows), "forecasts": rows}
+
+
+@app.get("/forecasts/accuracy")
+@cached()
+def forecasts_accuracy():
+    """Every graded forecast, plus a summary: overall MAE, beat-baseline
+    rate overall and by target_type, and the graded count. MAPE is
+    deliberately not in the summary (a handful of low-count skill targets
+    would make it wildly noisy) -- per-row pct_error is still included
+    for rows where actual > 0, so the detail is there without the
+    misleading headline aggregate."""
+    taxonomy = queries.get_taxonomy()
+    forecasts = queries.get_forecasts()
+    graded = [f for f in forecasts if f.get("graded_at") is not None]
+    graded.sort(key=lambda f: (f["target_week_start"], f["target_type"], f["target_key"]))
+
+    rows = []
+    for f in graded:
+        actual = f["actual"]
+        pct_error = round(f["abs_error"] / actual * 100, 2) if actual else None
+        rows.append({
+            "target_type": f["target_type"],
+            "target_key": f["target_key"],
+            "display": _forecast_display(f["target_type"], f["target_key"], taxonomy),
+            "target_week_start": f["target_week_start"],
+            "model_version": f["model_version"],
+            "predicted": f["predicted"],
+            "baseline_predicted": f["baseline_predicted"],
+            "actual": actual,
+            "abs_error": f["abs_error"],
+            "baseline_abs_error": f["baseline_abs_error"],
+            "beat_baseline": f["beat_baseline"],
+            "pct_error": pct_error,
+            "graded_at": f["graded_at"],
+        })
+
+    count_graded = len(graded)
+    mae_overall = round(statistics.fmean(f["abs_error"] for f in graded), 4) if graded else None
+    beat_overall = (
+        round(sum(1 for f in graded if f["beat_baseline"]) / count_graded, 4) if graded else None
+    )
+
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for f in graded:
+        by_type[f["target_type"]].append(f)
+    beat_by_type = {
+        t: round(sum(1 for f in fs if f["beat_baseline"]) / len(fs), 4)
+        for t, fs in by_type.items()
+    }
+
+    return {
+        "forecasts": rows,
+        "summary": {
+            "count_graded": count_graded,
+            "mae_overall": mae_overall,
+            "beat_baseline_rate_overall": beat_overall,
+            "beat_baseline_rate_by_type": beat_by_type,
+        },
+    }
+
+
+# --------------------------------------------------------------------------
 # GET / -- minimal liveness/index, not part of the spec but near-zero cost
 # --------------------------------------------------------------------------
 
@@ -1483,6 +1583,7 @@ def root():
             "/postings/recent", "/postings/foreign-currency",
             "/cities/breakdown", "/salaries/summary", "/coverage",
             "/companies/top", "/companies/{name}",
+            "/forecasts/pending", "/forecasts/accuracy",
             "/insights/live", "/system/health",
         ],
     }

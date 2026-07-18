@@ -102,5 +102,21 @@ def get_taxonomy() -> dict:
         return yaml.safe_load(f)
 
 
+FORECAST_COLUMNS = (
+    "id,run_id,created_at,model_version,target_type,target_key,target_week_start,"
+    "predicted,interval_low,interval_high,baseline_predicted,actual,graded_at,"
+    "abs_error,baseline_abs_error,beat_baseline"
+)
+
+
+@cached()
+def get_forecasts() -> list[dict]:
+    """Every forecasts row, pending and graded alike -- main.py splits by
+    graded_at itself. Written only by forecast.py (service-role key,
+    outside this read-only API); this is a plain public-read select, same
+    as every other table here."""
+    return _fetch_all("forecasts", FORECAST_COLUMNS)
+
+
 if __name__ == "__main__":
     print(RLS_SQL)

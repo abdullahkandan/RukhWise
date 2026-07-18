@@ -1,0 +1,39 @@
+name: Weekly Forecast
+
+on:
+  schedule:
+    # 04:00 UTC every Monday -- after the just-completed week (Sun 23:59
+    # PKT = Sun 18:59 UTC) has fully elapsed, so --grade always has a
+    # genuinely complete week to grade.
+    - cron: "0 4 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Grade before predict: grading needs the week that just ended,
+      # predicting needs (among other history) that same week's now-final
+      # actual as its most recent data point.
+      - name: Grade the most recently completed week
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python forecast.py --grade
+
+      - name: Predict next week
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python forecast.py --predict
