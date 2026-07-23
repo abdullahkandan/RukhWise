@@ -221,6 +221,15 @@ export default function MethodologyPage() {
                   reliable as the history behind them, and early readings should be treated
                   as provisional until more collection cycles accumulate.
                 </li>
+                <li>
+                  <strong className="text-java">Taxonomy coverage by domain.</strong> Skill
+                  coverage is currently deepest in technology and business-support roles and
+                  materially thinner in trades, food service, healthcare and education. This
+                  is measured, not estimated: a majority of postings in those domains
+                  currently produce one or zero substantive skill matches. Taxonomy
+                  expansion is underway and coverage will be re-measured against the same
+                  metric.
+                </li>
               </ul>
             </Prose>
           </section>

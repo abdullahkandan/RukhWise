@@ -506,6 +506,13 @@ def compute_depth(all_postings: list[dict]) -> dict:
         zero = sum(1 for c in counts if c == 0)
         return {
             "n_postings": n,
+            # The absolute count behind the rate -- a tiny domain (n=4) at
+            # 100% <=1-substantive looks like a priority by rate alone, but
+            # affects far fewer real postings than a huge domain at 30%.
+            # This is the number that should actually decide where a
+            # taxonomy v2 spends its entries, so it's what the table sorts
+            # by, not the rate.
+            "postings_affected": le1,
             "median": statistics.median(counts) if counts else None,
             "mean": round(statistics.fmean(counts), 2) if counts else None,
             "pct_le1": round(le1 / n * 100, 2) if n else None,
@@ -516,8 +523,8 @@ def compute_depth(all_postings: list[dict]) -> dict:
     by_domain_rows = {d: _row(counts) for d, counts in by_domain.items()}
 
     return {
-        "by_source": dict(sorted(by_source_rows.items(), key=lambda kv: -(kv[1]["pct_le1"] or 0))),
-        "by_domain": dict(sorted(by_domain_rows.items(), key=lambda kv: -(kv[1]["pct_le1"] or 0))),
+        "by_source": dict(sorted(by_source_rows.items(), key=lambda kv: -kv[1]["postings_affected"])),
+        "by_domain": dict(sorted(by_domain_rows.items(), key=lambda kv: -kv[1]["postings_affected"])),
         "per_posting_substantive": per_posting_substantive,
     }
 
@@ -530,62 +537,39 @@ def compute_depth(all_postings: list[dict]) -> dict:
 # text or snippets.
 # --------------------------------------------------------------------------
 
-def _count_new_category_proposals(raw: dict, existing_categories_lower: set[str]) -> int:
-    """Parses the model's JSON array out of the chat-completion response
-    and counts proposals whose category isn't one of taxonomy v1's
-    existing 11 -- the direct signal of how far a v2 taxonomy would need
-    to expand. Defensive: falls back to comparing proposed_category
+def _is_new_category(item: dict, existing_categories_lower: set[str]) -> bool:
+    """True if one candidate's proposal names a category outside taxonomy
+    v1's existing 11. Defensive: falls back to comparing proposed_category
     against the existing set if the model didn't set is_new_category
-    itself; returns 0 (logged) if the response isn't parseable JSON."""
-    try:
-        content = raw["choices"][0]["message"]["content"]
-        proposals = json.loads(content)
-    except Exception as exc:
-        logger.warning(f"Could not parse Groq response content as JSON ({exc}) -- new-category count unavailable")
-        return 0
-
-    count = 0
-    for item in proposals:
-        is_new = item.get("is_new_category")
-        if is_new is None:
-            is_new = str(item.get("proposed_category", "")).strip().casefold() not in existing_categories_lower
-        if is_new:
-            count += 1
-    return count
+    itself."""
+    is_new = item.get("is_new_category")
+    if is_new is None:
+        is_new = str(item.get("proposed_category", "")).strip().casefold() not in existing_categories_lower
+    return bool(is_new)
 
 
-def run_groq_pass(
-    gap_ranked: list[tuple[str, float]],
-    gap_qualified: dict[str, CandidateStats],
-    existing_categories: list[str],
-    report_date: str,
-) -> tuple[dict | None, int]:
-    """Sends the gap-focus top-100-by-lift list (and ONLY that list -- see
-    module docstring) to Groq for a proposed requirement type/category/
-    rationale/confidence per candidate. Returns (raw_response,
-    new_category_count). Raw response is written verbatim to
-    output/drift_groq_{date}.json, gitignored, never folded wholesale into
-    the markdown report (only a summary count is)."""
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        logger.warning(
-            "GROQ_API_KEY not set -- skipping the optional Groq pass. "
-            "(Applies to the gap-focus list only regardless; proposal-only regardless of that: "
-            "taxonomy_v1.yaml is never written by this script.)"
-        )
-        return None, 0
+GROQ_BATCH_SIZE = 40  # no single call carries more than this many candidates
 
-    payload_candidates = [
-        {
-            "phrase": gram,
-            "heuristic_type": classify_type(gram),
-            "lift": round(lift, 3),
-            "distinct_postings": len(gap_qualified[gram].postings),
-            "distinct_companies": len(gap_qualified[gram].companies),
-        }
-        for gram, lift in gap_ranked
-    ]
-    prompt = (
+
+def _extract_json_array(content: str) -> str:
+    """Groq's response sometimes wraps the requested JSON array in markdown
+    code fences and/or leading prose ("Here is the JSON array...") despite
+    being asked for JSON only -- observed on every batch in a live run.
+    Strips fences and extracts the substring from the first '[' to the
+    last ']' rather than assuming the content is bare JSON."""
+    text = content.strip()
+    fence_match = re.search(r"```(?:json)?\s*(\[.*\])\s*```", text, re.DOTALL)
+    if fence_match:
+        return fence_match.group(1)
+    start = text.find("[")
+    end = text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        return text[start:end + 1]
+    return text
+
+
+def _groq_prompt(payload_candidates: list[dict], existing_categories: list[str]) -> str:
+    return (
         "You are assisting a job-market analytics project that maintains a fixed skill taxonomy "
         "(v1) with these existing categories: " + ", ".join(existing_categories) + ". Below is a "
         "list of candidate requirement phrases mined SPECIFICALLY from postings the current "
@@ -602,32 +586,116 @@ def run_groq_pass(
         "confidence.\n\n" + json.dumps(payload_candidates, ensure_ascii=False)
     )
 
-    try:
-        resp = requests.post(
-            GROQ_API_URL,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0},
-            timeout=60,
+
+def run_groq_pass(
+    gap_ranked: list[tuple[str, float]],
+    gap_qualified: dict[str, CandidateStats],
+    existing_categories: list[str],
+    report_date: str,
+) -> tuple[list[dict], int, dict[str, dict]]:
+    """Sends the gap-focus top-100-by-lift list (and ONLY that list -- see
+    module docstring) to Groq for a proposed requirement type/category/
+    rationale/confidence per candidate, batched at GROQ_BATCH_SIZE
+    candidates per call so no single request carries too many at once. A
+    batch that fails (network error or unparseable response) is logged
+    loudly and its candidates simply have no proposal -- never silently
+    dropped without a trace.
+
+    Returns (batch_records, new_category_count, proposals_by_phrase):
+      - batch_records: one dict per batch {"batch_index", "candidates",
+        "response" or "error"}, written verbatim to
+        output/drift_groq_{date}.json (gitignored).
+      - new_category_count: how many candidates got a proposed category
+        that isn't one of taxonomy v1's existing ones -- the direct signal
+        of how far a taxonomy v2 would need to expand.
+      - proposals_by_phrase: phrase -> parsed proposal dict, for building
+        the taxonomy v2 review sheet.
+    """
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        logger.warning(
+            "GROQ_API_KEY not set -- skipping the optional Groq pass. "
+            "(Applies to the gap-focus list only regardless; proposal-only regardless of that: "
+            "taxonomy_v1.yaml is never written by this script.)"
         )
-        resp.raise_for_status()
-        raw = resp.json()
-    except Exception as exc:
-        logger.error(f"Groq pass failed: {exc}")
-        return None, 0
+        return [], 0, {}
+
+    existing_lower = {c.casefold() for c in existing_categories}
+    batches = [gap_ranked[i:i + GROQ_BATCH_SIZE] for i in range(0, len(gap_ranked), GROQ_BATCH_SIZE)]
+    batch_records: list[dict] = []
+    proposals_by_phrase: dict[str, dict] = {}
+    failed_batches = 0
+
+    for batch_index, batch in enumerate(batches):
+        payload_candidates = [
+            {
+                "phrase": gram,
+                "heuristic_type": classify_type(gram),
+                "lift": round(lift, 3),
+                "distinct_postings": len(gap_qualified[gram].postings),
+                "distinct_companies": len(gap_qualified[gram].companies),
+            }
+            for gram, lift in batch
+        ]
+        prompt = _groq_prompt(payload_candidates, existing_categories)
+
+        try:
+            resp = requests.post(
+                GROQ_API_URL,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+        except Exception as exc:
+            logger.error(
+                f"Groq batch {batch_index + 1}/{len(batches)} FAILED ({len(batch)} candidates, "
+                f"no proposal for any of them): {exc}"
+            )
+            batch_records.append({
+                "batch_index": batch_index,
+                "candidates": [gram for gram, _ in batch],
+                "error": str(exc),
+            })
+            failed_batches += 1
+            continue
+
+        batch_records.append({
+            "batch_index": batch_index,
+            "candidates": [gram for gram, _ in batch],
+            "response": raw,
+        })
+
+        try:
+            content = raw["choices"][0]["message"]["content"]
+            batch_proposals = json.loads(_extract_json_array(content))
+            for item in batch_proposals:
+                phrase = item.get("phrase")
+                if phrase:
+                    proposals_by_phrase[phrase] = item
+        except Exception as exc:
+            logger.error(
+                f"Groq batch {batch_index + 1}/{len(batches)} returned but could not be parsed as "
+                f"JSON ({exc}) -- no proposal for its {len(batch)} candidates"
+            )
+            failed_batches += 1
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     groq_path = OUTPUT_DIR / f"drift_groq_{report_date}.json"
-    groq_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info(f"Groq raw response (proposal only, NOT applied to taxonomy_v1.yaml) written to {groq_path}")
+    groq_path.write_text(json.dumps(batch_records, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(f"Groq raw responses (proposal only, NOT applied to taxonomy_v1.yaml) written to {groq_path}")
 
-    existing_lower = {c.casefold() for c in existing_categories}
-    new_category_count = _count_new_category_proposals(raw, existing_lower)
-    logger.info(
-        f"Groq proposed a NEW category (not one of taxonomy v1's {len(existing_categories)}) for "
-        f"{new_category_count} of {len(gap_ranked)} gap-focus candidate(s) -- this is the direct "
-        f"signal of how far a taxonomy v2 would need to expand beyond v1's categories."
+    new_category_count = sum(
+        1 for item in proposals_by_phrase.values() if _is_new_category(item, existing_lower)
     )
-    return raw, new_category_count
+    logger.info(
+        f"Groq: {len(proposals_by_phrase)}/{len(gap_ranked)} candidates got a proposal across "
+        f"{len(batches)} batch(es) ({failed_batches} batch(es) failed). {new_category_count} "
+        f"proposed a NEW category (not one of taxonomy v1's {len(existing_categories)}) -- the "
+        f"direct signal of how far a taxonomy v2 would need to expand."
+    )
+    return batch_records, new_category_count, proposals_by_phrase
 
 
 # --------------------------------------------------------------------------
@@ -642,6 +710,27 @@ def _source_split(stats: CandidateStats) -> str:
 def _domain_split(stats: CandidateStats) -> str:
     parts = sorted(stats.by_domain_postings.items(), key=lambda kv: -len(kv[1]))
     return ", ".join(f"{domain}:{len(ids)}" for domain, ids in parts)
+
+
+def _aggregate_group(grams: list[str], stats_lookup: dict[str, CandidateStats]) -> dict:
+    """Union (not sum) of postings/companies/domains across a group of
+    candidates -- summing would double-count any posting that triggers
+    more than one candidate in the same proposed category."""
+    all_postings: set = set()
+    all_companies: set = set()
+    domain_postings: dict[str, set] = defaultdict(set)
+    for gram in grams:
+        stats = stats_lookup[gram]
+        all_postings |= stats.postings
+        all_companies |= stats.companies
+        for domain, ids in stats.by_domain_postings.items():
+            domain_postings[domain] |= ids
+    domains_ranked = sorted(domain_postings.items(), key=lambda kv: -len(kv[1]))
+    return {
+        "postings": len(all_postings),
+        "companies": len(all_companies),
+        "domains": [(d, len(ids)) for d, ids in domains_ranked],
+    }
 
 
 # --------------------------------------------------------------------------
@@ -701,12 +790,12 @@ def _print_console(by_type: dict[str, list[str]], qualified: dict[str, Candidate
 
 
 def _print_depth_table(rows: dict[str, dict]) -> None:
-    header = f"{'':<24}{'n':<6}{'median':<8}{'mean':<8}{'%<=1':<8}{'%=0':<8}"
+    header = f"{'':<24}{'n':<6}{'affected':<10}{'median':<8}{'mean':<8}{'%<=1':<8}{'%=0':<8}"
     print(header)
     print("-" * len(header))
     for key, row in rows.items():
         print(
-            f"{key:<24}{row['n_postings']:<6}{row['median']:<8}{row['mean']:<8}"
+            f"{key:<24}{row['n_postings']:<6}{row['postings_affected']:<10}{row['median']:<8}{row['mean']:<8}"
             f"{row['pct_le1']:<8}{row['pct_zero']:<8}"
         )
 
@@ -715,8 +804,10 @@ def _print_depth(depth: dict) -> None:
     print(f"\n{'=' * 70}\nDEPTH -- SUBSTANTIVE TAXONOMY COVERAGE (headline blind-spot statistic)\n{'=' * 70}")
     print(
         "Substantive = distinct taxonomy matches EXCLUDING 'soft' and 'office_admin' categories, "
-        "which match almost any posting regardless of actual domain. Sorted by %% with <=1 "
-        "substantive match, descending -- that column is the actual measure of the blind spot.\n"
+        "which match almost any posting regardless of actual domain. Sorted by postings_affected "
+        "(n_postings * %% with <=1 substantive match) DESCENDING -- a rate-only sort makes tiny "
+        "domains look like priorities; this is the count that should actually decide where a "
+        "taxonomy v2 spends its entries. Rate columns are still shown alongside it.\n"
     )
     print("By source:")
     _print_depth_table(depth["by_source"])
@@ -775,25 +866,26 @@ def _write_report(
     lines.append(
         "Substantive = distinct taxonomy matches EXCLUDING the 'soft' and 'office_admin' "
         "categories, which match almost any posting regardless of actual domain -- a posting can "
-        "register as \"matched\" while being substantively unmeasured. Sorted by % of postings "
-        "with <=1 substantive match, descending; that column is the actual measure of the blind "
-        "spot, replacing plain zero-match coverage.\n"
+        "register as \"matched\" while being substantively unmeasured. Sorted by **postings_affected** "
+        "(n * % with <=1 substantive match) descending, not by rate -- a rate-only sort makes tiny "
+        "domains look like priorities; this count is what should actually decide where a taxonomy "
+        "v2 spends its entries. Rate columns are still shown alongside it.\n"
     )
     lines.append("### By source\n")
-    lines.append("| source | n | median | mean | % <=1 substantive | % 0 substantive |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| source | n | postings_affected | median | mean | % <=1 substantive | % 0 substantive |")
+    lines.append("|---|---|---|---|---|---|---|")
     for source, row in depth["by_source"].items():
         lines.append(
-            f"| {source} | {row['n_postings']} | {row['median']} | {row['mean']} | "
-            f"{row['pct_le1']} | {row['pct_zero']} |"
+            f"| {source} | {row['n_postings']} | {row['postings_affected']} | {row['median']} | "
+            f"{row['mean']} | {row['pct_le1']} | {row['pct_zero']} |"
         )
     lines.append("\n### By inferred domain\n")
-    lines.append("| domain | n | median | mean | % <=1 substantive | % 0 substantive |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| domain | n | postings_affected | median | mean | % <=1 substantive | % 0 substantive |")
+    lines.append("|---|---|---|---|---|---|---|")
     for domain, row in depth["by_domain"].items():
         lines.append(
-            f"| {domain} | {row['n_postings']} | {row['median']} | {row['mean']} | "
-            f"{row['pct_le1']} | {row['pct_zero']} |"
+            f"| {domain} | {row['n_postings']} | {row['postings_affected']} | {row['median']} | "
+            f"{row['mean']} | {row['pct_le1']} | {row['pct_zero']} |"
         )
 
     lines.append(
@@ -848,14 +940,15 @@ def _write_report(
                 lines.append(f"- snippet: “{snippet}”")
             lines.append("")
 
-        if groq_raw is not None:
+        if groq_raw:
             groq_path = OUTPUT_DIR / f"drift_groq_{report_date}.json"
+            review_path = OUTPUT_DIR / f"taxonomy_v2_review_{report_date}.md"
             lines.append(
-                f"**Groq proposals (PROPOSAL ONLY, not applied to taxonomy_v1.yaml):** raw response "
-                f"logged verbatim to `{groq_path}`. Proposed a NEW category (not one of taxonomy "
-                f"v1's existing categories) for **{new_category_count} of {len(gap_top)}** "
-                "gap-focus candidates -- the direct signal of how far a taxonomy v2 would need to "
-                "expand.\n"
+                f"**Groq proposals (PROPOSAL ONLY, not applied to taxonomy_v1.yaml):** raw batch "
+                f"responses logged verbatim to `{groq_path}`. Proposed a NEW category (not one of "
+                f"taxonomy v1's existing categories) for **{new_category_count} of {len(gap_top)}** "
+                f"gap-focus candidates -- the direct signal of how far a taxonomy v2 would need to "
+                f"expand. See `{review_path}` for the full line-by-line approval sheet.\n"
             )
 
     # ---- 4. Skill bucket, capped (large/noisy, at the end) ---------------
@@ -918,6 +1011,207 @@ def _write_report(
 
 
 # --------------------------------------------------------------------------
+# Taxonomy v2 review sheet -- the actual deliverable of the Groq pass.
+# Built for line-by-line human approval; nothing here is ever applied to
+# taxonomy_v1.yaml automatically.
+# --------------------------------------------------------------------------
+
+CONFIDENCE_FLAG_THRESHOLD = 0.6
+
+
+def _proposal_confidence(item: dict | None) -> float | None:
+    if item is None:
+        return None
+    try:
+        return float(item.get("confidence"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _one_snippet(stats: CandidateStats) -> str:
+    return stats.snippets[0] if stats.snippets else "(no snippet)"
+
+
+def _review_candidate_line(gram: str, stats: CandidateStats, item: dict | None, heuristic_type: str) -> str:
+    """One scannable line per candidate: candidate, proposed type, proposed
+    category, confidence, distinct postings, distinct companies, domain
+    split, one context snippet -- nothing else, per spec."""
+    if item is not None:
+        ptype = item.get("proposed_requirement_type") or heuristic_type
+        pcat = item.get("proposed_category") or "(none)"
+        conf = _proposal_confidence(item)
+        conf_str = f"{conf:.2f}" if conf is not None else "n/a"
+    else:
+        ptype = heuristic_type
+        pcat = "(heuristic-only, not Groq-reviewed)"
+        conf_str = "n/a"
+    return (
+        f"- **`{gram}`** -- type={ptype}, category={pcat}, confidence={conf_str}, "
+        f"postings={len(stats.postings)}, companies={len(stats.companies)}, "
+        f"domains=[{_domain_split(stats)}] -- “{_one_snippet(stats)}”"
+    )
+
+
+def build_review_sheet(
+    proposals_by_phrase: dict[str, dict],
+    gap_qualified: dict[str, CandidateStats],
+    full_qualified: dict[str, CandidateStats],
+    by_type: dict[str, list[str]],
+    existing_categories: list[str],
+    report_date: str,
+) -> tuple[Path, dict]:
+    existing_lower = {c.casefold() for c in existing_categories}
+
+    new_category_groups: dict[str, list[str]] = defaultdict(list)
+    existing_category_groups: dict[str, list[str]] = defaultdict(list)
+    flagged: list[str] = []
+
+    for gram, item in proposals_by_phrase.items():
+        is_new = _is_new_category(item, existing_lower)
+        raw_category = str(item.get("proposed_category") or "(uncategorized)")
+        if is_new:
+            new_category_groups[raw_category].append(gram)
+        else:
+            canonical = next(
+                (c for c in existing_categories if c.casefold() == raw_category.strip().casefold()),
+                raw_category,
+            )
+            existing_category_groups[canonical].append(gram)
+
+        heuristic = classify_type(gram)
+        proposed_t = item.get("proposed_requirement_type") or heuristic
+        conflicting = str(proposed_t).strip().casefold() != heuristic.strip().casefold()
+        conf = _proposal_confidence(item)
+        if (conf is not None and conf < CONFIDENCE_FLAG_THRESHOLD) or conflicting:
+            flagged.append(gram)
+
+    lines: list[str] = []
+    lines.append(f"# Taxonomy v2 Review Sheet -- {report_date}\n")
+    lines.append(
+        "Built for line-by-line human approval. Sections A, B, D come from Groq reviewing the "
+        "--gap-focus top-100-by-lift candidates; Section C is the full-corpus heuristic "
+        "classification (credential/experience/language/attribute), corpus-wide and complete, "
+        "cross-referenced with Groq's proposal where a candidate happened to also appear in the "
+        "gap-focus list. Nothing here is applied to `taxonomy_v1.yaml` automatically -- confidence "
+        "is the model's own self-reported number, not independently verified.\n"
+    )
+
+    # ---- A. Proposed NEW categories ----
+    lines.append("## A. Proposed NEW categories\n")
+    lines.append(
+        "Ordered by total distinct postings covered -- this decides how far v2 expands beyond "
+        "v1's 11 categories.\n"
+    )
+    if not new_category_groups:
+        lines.append("(none proposed)\n")
+    else:
+        aggs = {cat: _aggregate_group(grams, gap_qualified) for cat, grams in new_category_groups.items()}
+        for cat in sorted(aggs, key=lambda c: -aggs[c]["postings"]):
+            agg = aggs[cat]
+            domains_str = ", ".join(f"{d}:{n}" for d, n in agg["domains"]) or "(none)"
+            grams = sorted(new_category_groups[cat], key=lambda g: -len(gap_qualified[g].companies))
+            lines.append(f"### {cat} ({len(grams)} candidates)\n")
+            lines.append(
+                f"Covers {agg['postings']} distinct postings, {agg['companies']} distinct companies. "
+                f"Domains: {domains_str}\n"
+            )
+            for gram in grams:
+                lines.append(_review_candidate_line(gram, gap_qualified[gram], proposals_by_phrase[gram], classify_type(gram)))
+            lines.append("")
+
+    # ---- B. Proposed additions to EXISTING categories ----
+    lines.append("## B. Proposed additions to EXISTING categories\n")
+    if not existing_category_groups:
+        lines.append("(none proposed)\n")
+    else:
+        for cat in sorted(existing_category_groups):
+            grams = sorted(existing_category_groups[cat], key=lambda g: -len(gap_qualified[g].companies))
+            lines.append(f"### {cat} ({len(grams)} candidates)\n")
+            for gram in grams:
+                lines.append(_review_candidate_line(gram, gap_qualified[gram], proposals_by_phrase[gram], classify_type(gram)))
+            lines.append("")
+
+    # ---- C. Non-skill requirement types, corpus-wide, complete ----
+    lines.append("## C. Non-skill requirement types (credential / experience / language / attribute)\n")
+    lines.append(
+        "Corpus-wide and complete -- not restricted to gap-focus. Already cleanly classified by "
+        "heuristic; shown here for the same approval pass. Marked heuristic-only unless the "
+        "candidate also happened to appear in the gap-focus Groq review.\n"
+    )
+    for t in ("credential", "experience", "language", "attribute"):
+        grams = by_type.get(t, [])
+        lines.append(f"### {t} ({len(grams)})\n")
+        for gram in grams:
+            stats = full_qualified[gram]
+            lines.append(_review_candidate_line(gram, stats, proposals_by_phrase.get(gram), t))
+        lines.append("")
+
+    # ---- D. Flagged: low confidence or conflicting ----
+    lines.append(f"## D. Flagged: confidence < {CONFIDENCE_FLAG_THRESHOLD} or conflicting with heuristic type\n")
+    if not flagged:
+        lines.append("(none flagged)\n")
+    else:
+        flagged_sorted = sorted(flagged, key=lambda g: (_proposal_confidence(proposals_by_phrase[g]) or 1.0))
+        for gram in flagged_sorted:
+            stats = gap_qualified[gram]
+            item = proposals_by_phrase[gram]
+            heuristic = classify_type(gram)
+            proposed_t = item.get("proposed_requirement_type") or heuristic
+            conf = _proposal_confidence(item)
+            reasons = []
+            if conf is not None and conf < CONFIDENCE_FLAG_THRESHOLD:
+                reasons.append(f"confidence {conf:.2f}")
+            if str(proposed_t).strip().casefold() != heuristic.strip().casefold():
+                reasons.append(f"heuristic={heuristic} vs proposed={proposed_t}")
+            lines.append(f"- **`{gram}`** ({'; '.join(reasons)})")
+            lines.append(
+                f"  category={item.get('proposed_category')}, rationale: {item.get('rationale', '')}"
+            )
+            lines.append(
+                f"  postings={len(stats.postings)}, companies={len(stats.companies)}, "
+                f"domains=[{_domain_split(stats)}]"
+            )
+        lines.append("")
+
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    review_path = OUTPUT_DIR / f"taxonomy_v2_review_{report_date}.md"
+    review_path.write_text("\n".join(lines), encoding="utf-8")
+
+    all_reviewed = set(proposals_by_phrase.keys())
+    for t in ("credential", "experience", "language", "attribute"):
+        all_reviewed.update(by_type.get(t, []))
+
+    def _final_type(gram: str) -> str:
+        item = proposals_by_phrase.get(gram)
+        if item and item.get("proposed_requirement_type"):
+            return item["proposed_requirement_type"]
+        return classify_type(gram)
+
+    summary = {
+        "total_candidates": len(all_reviewed),
+        "per_new_category": {cat: len(grams) for cat, grams in new_category_groups.items()},
+        "per_requirement_type": Counter(_final_type(g) for g in all_reviewed),
+        "flagged_count": len(flagged),
+    }
+    return review_path, summary
+
+
+def _print_review_summary(summary: dict) -> None:
+    print(f"\n{'=' * 70}\nTAXONOMY v2 REVIEW SHEET SUMMARY\n{'=' * 70}")
+    print(f"Total candidates reviewed: {summary['total_candidates']}")
+    print("\nPer proposed NEW category:")
+    if not summary["per_new_category"]:
+        print("  (none)")
+    else:
+        for cat, n in sorted(summary["per_new_category"].items(), key=lambda kv: -kv[1]):
+            print(f"  {cat:<30} {n}")
+    print("\nPer requirement type (final -- Groq-proposed where reviewed, else heuristic):")
+    for t, n in summary["per_requirement_type"].most_common():
+        print(f"  {t:<12} {n}")
+    print(f"\nFlagged for closer reading (Section D): {summary['flagged_count']}")
+
+
+# --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
 
@@ -968,6 +1262,7 @@ def run_drift(gap_focus: bool = False, with_groq: bool = False) -> None:
 
     groq_raw = None
     new_category_count = 0
+    proposals_by_phrase: dict[str, dict] = {}
     if with_groq:
         if gap_data is None:
             logger.warning(
@@ -975,7 +1270,7 @@ def run_drift(gap_focus: bool = False, with_groq: bool = False) -> None:
             )
         else:
             existing_categories = list(extract_skills._TAXONOMY["categories"].keys())
-            groq_raw, new_category_count = run_groq_pass(
+            groq_raw, new_category_count, proposals_by_phrase = run_groq_pass(
                 gap_data["ranked"][:100], gap_data["qualified"], existing_categories, report_date
             )
 
@@ -985,6 +1280,17 @@ def run_drift(gap_focus: bool = False, with_groq: bool = False) -> None:
     )
     logger.info(f"Report written to {report_path}")
     print(f"\nFull report: {report_path}")
+
+    if proposals_by_phrase:
+        existing_categories = list(extract_skills._TAXONOMY["categories"].keys())
+        review_path, summary = build_review_sheet(
+            proposals_by_phrase, gap_data["qualified"], qualified, by_type, existing_categories, report_date
+        )
+        _print_review_summary(summary)
+        logger.info(f"Taxonomy v2 review sheet written to {review_path}")
+        print(f"Review sheet: {review_path}")
+    elif with_groq:
+        logger.info("No Groq proposals were obtained -- skipping taxonomy v2 review sheet")
 
 
 def main() -> None:
