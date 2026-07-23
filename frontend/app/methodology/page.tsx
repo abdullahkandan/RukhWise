@@ -42,11 +42,35 @@ export default function MethodologyPage() {
                 read as a sample of the market, not an exhaustive count.
               </p>
               <p className="mt-4">
-                <strong className="text-java">LinkedIn is excluded entirely.</strong> Its
-                terms of service and anti-scraping measures make automated, unattended
-                collection impractical to do responsibly at the cadence this project
-                requires. Any market read here is a read of Mustakbil and Rozee, not of the
-                full Pakistani job market.
+                <strong className="text-java">Indeed</strong> is collected daily via
+                JobSpy, the same automated cadence as Mustakbil. It surfaces zero salary
+                data for this market — every Indeed-sourced posting has a null salary,
+                not a missing one, so Indeed rows are excluded from salary aggregates
+                entirely rather than silently counted as &ldquo;no data disclosed.&rdquo;
+              </p>
+              <p className="mt-4">
+                <strong className="text-java">LinkedIn</strong> is collected locally,
+                best-effort, not on the automated daily schedule. Its guest search
+                endpoints (also via JobSpy) have been observed to return listings outside
+                Pakistan despite a Pakistan-scoped location filter, so every LinkedIn row
+                is checked against a known-city/country match before being stored —
+                anything that doesn&rsquo;t resolve to Pakistan is dropped and logged, not
+                kept. LinkedIn also resurfaces postings that are genuinely weeks old;
+                those are still stored with their real posting date preserved, but
+                LinkedIn is excluded from the forecasting engine&rsquo;s targets
+                entirely, since a first-seen-today timestamp on a month-old listing would
+                corrupt a weekly-actuals model that assumes recent collection means
+                recent posting.
+              </p>
+              <p className="mt-4">
+                <strong className="text-java">Corpus break, July 2026.</strong> Indeed
+                and LinkedIn were added this month. A direct check against the existing
+                corpus at the time showed near-zero overlap in employer names with
+                Mustakbil and Rozee — these sources are broadening market coverage into
+                employers the prior two weren&rsquo;t reaching, not simply adding volume
+                to employers already tracked. Trend lines that span this addition should
+                be read with that in mind: some of the jump is coverage, not organic
+                market growth.
               </p>
             </Prose>
           </section>

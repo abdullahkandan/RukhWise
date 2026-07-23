@@ -17,6 +17,18 @@
       -- Rozee's pagination is JS-only, no real page URLs) and harvests many
       pages in one sitting.
 
+  python collect.py --source indeed
+      JobSpy (blank + 'data' keyword streams, pooled/deduped). Automated,
+      in collect.yml's daily schedule -- wrapped so a failure there doesn't
+      fail the whole job, since Indeed's tolerance of GitHub's datacenter
+      IPs hasn't been proven yet at time of writing.
+
+  python collect.py --source linkedin
+      JobSpy, same two-stream shape, plus a mandatory geo filter (LinkedIn's
+      own location search leaks non-Pakistani listings) and 30s between
+      streams. Local/best-effort only, deliberately NOT in collect.yml --
+      run this by hand, same as Rozee's --live path.
+
 Every Mustakbil collection run (general or --category) auto-enriches only
 the postings it newly inserted -- already-known postings aren't re-fetched
 for detail on every run. --enrich-all is the separate, explicit path for
@@ -107,6 +119,72 @@ def run_mustakbil(pages: int, start_url: str, category: str, run_id: str) -> Non
         postings_parsed=len(jobs),
         counts=counts,
         enrich_result=enrich_result,
+        extract_result=extract_result,
+    )
+
+
+def run_indeed(run_id: str) -> None:
+    """Two JobSpy streams (blank + 'data'), pooled + deduped by job_url in
+    jobspy_source.py. Trusted enough for the daily schedule (see
+    collect.yml) but still wrapped in try/continue-on-error there until a
+    workflow_dispatch run confirms Indeed survives GitHub's datacenter IPs."""
+    from jobspy_source import fetch_indeed_jobs
+    from storage import upsert_postings
+
+    logger.info(f"[{run_id}] Indeed collection starting (JobSpy, 2 streams)")
+    result = fetch_indeed_jobs()
+    jobs = result["jobs"]
+    for stream in result["stream_results"]:
+        logger.info(
+            f"[{run_id}] Indeed stream '{stream['category']}': "
+            f"requested={stream['requested']} received={stream['received']}"
+        )
+
+    counts = upsert_postings(jobs, run_id=run_id)
+    extract_result = _extract_skills_for_run(run_id)
+
+    _log_summary(
+        run_id=run_id,
+        source="indeed",
+        pages_fetched=len(result["stream_results"]),  # streams, not pages -- kept for RUN SUMMARY consistency
+        postings_parsed=len(jobs),
+        counts=counts,
+        extract_result=extract_result,
+    )
+
+
+def run_linkedin(run_id: str) -> None:
+    """Two JobSpy streams, 30s slept between them (jobspy_source.py), then
+    a MANDATORY geo filter -- LinkedIn's own location search has been
+    observed to leak non-Pakistani listings even with location="Pakistan".
+    Local/best-effort only, deliberately not in collect.yml -- run this
+    by hand, same as Rozee's --live path."""
+    from jobspy_source import STALE_DAYS_THRESHOLD, fetch_linkedin_jobs
+    from storage import upsert_postings
+
+    logger.info(f"[{run_id}] LinkedIn collection starting (JobSpy, 2 streams, local/best-effort)")
+    result = fetch_linkedin_jobs()
+    jobs = result["jobs"]
+    for stream in result["stream_results"]:
+        logger.info(
+            f"[{run_id}] LinkedIn stream '{stream['category']}': "
+            f"requested={stream['requested']} received={stream['received']}"
+        )
+    logger.info(
+        f"[{run_id}] LinkedIn geo-filter: dropped={result['dropped_count']} of "
+        f"{len(jobs) + result['dropped_count']} pooled row(s); "
+        f"stale (>{STALE_DAYS_THRESHOLD}d old, still stored)={result['stale_count']}"
+    )
+
+    counts = upsert_postings(jobs, run_id=run_id)
+    extract_result = _extract_skills_for_run(run_id)
+
+    _log_summary(
+        run_id=run_id,
+        source="linkedin",
+        pages_fetched=len(result["stream_results"]),  # streams, not pages -- kept for RUN SUMMARY consistency
+        postings_parsed=len(jobs),
+        counts=counts,
         extract_result=extract_result,
     )
 
@@ -318,7 +396,7 @@ def _log_summary(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rukhwise scraping + storage collector")
-    parser.add_argument("--source", choices=["mustakbil", "rozee"], default="mustakbil")
+    parser.add_argument("--source", choices=["mustakbil", "rozee", "indeed", "linkedin"], default="mustakbil")
     parser.add_argument("--pages", type=int, default=5, help="Pages for Mustakbil (default 5)")
     parser.add_argument("--max-pages", type=int, default=5, help="Max pages for Rozee --live")
     parser.add_argument("--live", action="store_true", help="Rozee CDP batch-enrichment mode")
@@ -350,6 +428,10 @@ def main() -> None:
             logger.error("--source rozee requires --live (CDP-connected batch enrichment only)")
             sys.exit(1)
         run_rozee_live(max_pages=args.max_pages, run_id=run_id, category=args.category)
+    elif args.source == "indeed":
+        run_indeed(run_id=run_id)
+    elif args.source == "linkedin":
+        run_linkedin(run_id=run_id)
 
 
 if __name__ == "__main__":

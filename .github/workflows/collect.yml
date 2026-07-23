@@ -37,3 +37,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python collect.py --source mustakbil --category it --pages 10
+
+      # Indeed via JobSpy. Not yet proven to survive GitHub's datacenter IPs
+      # (Indeed can and does block/rate-limit non-residential ranges) --
+      # continue-on-error so a block here shows up loudly as a failed step
+      # in the run log without taking down Mustakbil's already-succeeded
+      # collection. Trust the schedule only after a workflow_dispatch run
+      # confirms real rows land, not just a clean exit.
+      - name: Run Indeed collection (JobSpy)
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python collect.py --source indeed

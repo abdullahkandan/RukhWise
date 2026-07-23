@@ -44,9 +44,10 @@ Python scrapers ──> Supabase (Postgres) ──> FastAPI (Render) ──> Nex
 | Source | Method | Notes |
 |---|---|---|
 | Mustakbil | Automated, daily | Primary source. Public API, listing + detail enrichment |
+| Indeed | Automated, daily | Via JobSpy; pending datacenter-IP verification before the schedule is fully trusted |
 | Rozee.pk | Semi-manual, weekly | Cloudflare-protected; collected via a human-attended browser session |
 | BrightSpyre | Supplementary | |
-| LinkedIn | **Deliberately excluded** | Scraping violates ToS. A system built on honest self-grading cannot stand on dishonest collection |
+| LinkedIn | Best-effort, local | Guest endpoints via JobSpy, geo-filtered, excluded from forecast targets |
 
 ## Known limitations
 

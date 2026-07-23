@@ -1431,6 +1431,15 @@ def system_health():
         if last_seen and (src not in last_run_per_source or last_seen > last_run_per_source[src]):
             last_run_per_source[src] = last_seen
 
+    # first_seen_at is always "when we collected it", not "when it was
+    # posted" -- accurate as a proxy for posting recency for Mustakbil/
+    # Indeed (collected same-day) but NOT for LinkedIn, where a listing
+    # can be weeks old when first_seen_at is stamped today (see
+    # jobspy_source.py's staleness handling). These two counts measure
+    # collection/ingestion activity across all sources, not "how many new
+    # jobs appeared" -- forecast.py's weekly actuals are the metric that
+    # actually needs posting-recency accuracy, which is why it's scoped to
+    # AUTOMATED_SOURCES and excludes LinkedIn entirely.
     added_24h = sum(
         1 for p in postings
         if p.get("first_seen_at") and _parse_ts(p["first_seen_at"]) >= now - timedelta(hours=24)

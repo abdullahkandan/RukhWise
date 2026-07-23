@@ -26,8 +26,16 @@ Methodology is fixed by design, not reconfigurable via flags:
   - PKT weeks run Monday 00:00 to Sunday 23:59:59.999999 (PKT = UTC+5, no
     DST -- a fixed offset is exact, not an approximation).
   - Volume actual/prediction: source='mustakbil' only.
-  - Skill actual/prediction: all sources, with postings from Naseeb
-    Enterprise Inc (the one consistently bulk poster) excluded.
+  - Skill actual/prediction: AUTOMATED_SOURCES only (mustakbil, indeed --
+    both collected daily/unattended), with postings from Naseeb
+    Enterprise Inc (the one consistently bulk poster) excluded. Rozee
+    (semi-manual, session-based) and LinkedIn (local/best-effort, and its
+    first_seen_at can't be trusted as posting recency -- see
+    jobspy_source.py's docstring on staleness) are excluded from forecast
+    targets entirely, not just from the bulk-poster check. This was "all
+    sources" before Indeed/LinkedIn existed; narrowing it to
+    AUTOMATED_SOURCES is what keeps that claim actually true now that a
+    non-automated, staleness-prone source (LinkedIn) is in the corpus.
   - model trailing_mean_3w_v1: predicted = mean of the last <=3 complete
     weeks' counts for that target (fewer if less history exists, minimum
     1 -- model_version gets a '_shorthist' suffix when so). baseline =
@@ -38,8 +46,8 @@ Methodology is fixed by design, not reconfigurable via flags:
     universe's earliest postings.first_seen_at onward -- weeks entirely
     before collection began are never queried as zero-count history, since
     that would fabricate history the collector was never running to
-    observe. Mustakbil-only volume and all-source skills therefore each
-    get their own earliest-week floor.
+    observe. Mustakbil-only volume and AUTOMATED_SOURCES skills therefore
+    each get their own earliest-week floor.
 """
 
 from __future__ import annotations
@@ -59,6 +67,11 @@ logger = setup_logging()
 
 PKT = timezone(timedelta(hours=5))
 BULK_COMPANY_KEY = "naseeb enterprise inc"  # normalized: whitespace-collapsed, casefolded
+# Skill targets only ever draw from these -- daily/unattended collection,
+# so first_seen_at is a trustworthy proxy for posting recency. Rozee
+# (session-based) and LinkedIn (staleness, see jobspy_source.py) are
+# excluded from forecasting entirely, not merely bulk-poster-excluded.
+AUTOMATED_SOURCES = {"mustakbil", "indeed"}
 TOP_SKILLS_COUNT = 12
 MEAN_WINDOW_WEEKS = 3
 INTERVAL_WINDOW_WEEKS = 4
@@ -244,6 +257,15 @@ def run_predict() -> list[dict]:
         return []
 
     postings_index = {p["id"]: p for p in postings}
+    # Skill targets only ever look at AUTOMATED_SOURCES postings -- see the
+    # module docstring and AUTOMATED_SOURCES' own comment. Passing this
+    # (rather than the full postings_index) into _skill_posting_ids /
+    # _top_skills / _count_distinct_in_week is what actually enforces the
+    # exclusion: any skill_mentions row pointing at a non-automated
+    # posting_id simply won't resolve against this index.
+    automated_postings_index = {
+        pid: p for pid, p in postings_index.items() if p.get("source") in AUTOMATED_SOURCES
+    }
 
     mustakbil_postings = [p for p in postings if p.get("source") == "mustakbil"]
     if not mustakbil_postings:
@@ -255,10 +277,16 @@ def run_predict() -> list[dict]:
         volume_mean_weeks = _weeks_history(complete_week_start, MEAN_WINDOW_WEEKS, mustakbil_earliest_week)
         volume_interval_weeks = _weeks_history(complete_week_start, INTERVAL_WINDOW_WEEKS, mustakbil_earliest_week)
 
-    all_earliest = min(_parse_ts(p["first_seen_at"]) for p in postings)
-    all_earliest_week = _week_start(all_earliest)
-    skill_mean_weeks = _weeks_history(complete_week_start, MEAN_WINDOW_WEEKS, all_earliest_week)
-    skill_interval_weeks = _weeks_history(complete_week_start, INTERVAL_WINDOW_WEEKS, all_earliest_week)
+    automated_postings = list(automated_postings_index.values())
+    if not automated_postings:
+        logger.warning("No AUTOMATED_SOURCES postings found -- skipping all skill targets this run")
+        skill_mean_weeks: list[datetime] = []
+        skill_interval_weeks: list[datetime] = []
+    else:
+        automated_earliest = min(_parse_ts(p["first_seen_at"]) for p in automated_postings)
+        automated_earliest_week = _week_start(automated_earliest)
+        skill_mean_weeks = _weeks_history(complete_week_start, MEAN_WINDOW_WEEKS, automated_earliest_week)
+        skill_interval_weeks = _weeks_history(complete_week_start, INTERVAL_WINDOW_WEEKS, automated_earliest_week)
 
     run_id = f"forecast-{now_utc:%Y%m%dT%H%M%S}"
     candidates: list[dict] = []
@@ -273,24 +301,24 @@ def run_predict() -> list[dict]:
     else:
         logger.warning("No complete week of Mustakbil history yet -- skipping volume/all this run")
 
-    # ---- skill/{name}, top 12 by distinct postings, all sources, bulk excluded ----
+    # ---- skill/{name}, top 12 by distinct postings, AUTOMATED_SOURCES, bulk excluded ----
     if skill_mean_weeks:
-        skill_ids = _skill_posting_ids(mentions, postings_index, exclude_bulk=True)
+        skill_ids = _skill_posting_ids(mentions, automated_postings_index, exclude_bulk=True)
         top_skills = _top_skills(
-            skill_ids, postings_index,
+            skill_ids, automated_postings_index,
             window_start_utc=skill_interval_weeks[0],
             window_end_utc=complete_week_start + timedelta(days=7),
             limit=TOP_SKILLS_COUNT,
         )
         for skill in top_skills:
             ids = skill_ids.get(skill, set())
-            mean_counts = [_count_distinct_in_week(ids, postings_index, w) for w in skill_mean_weeks]
-            interval_counts = [_count_distinct_in_week(ids, postings_index, w) for w in skill_interval_weeks]
+            mean_counts = [_count_distinct_in_week(ids, automated_postings_index, w) for w in skill_mean_weeks]
+            interval_counts = [_count_distinct_in_week(ids, automated_postings_index, w) for w in skill_interval_weeks]
             candidates.append(
                 _build_forecast_row(run_id, "skill", skill, target_week_start, mean_counts, interval_counts)
             )
-    else:
-        logger.warning("No complete week of history yet -- skipping all skill targets this run")
+    elif automated_postings:
+        logger.warning("No complete week of AUTOMATED_SOURCES history yet -- skipping all skill targets this run")
 
     result = insert_forecasts(candidates)
     logger.info(
@@ -356,11 +384,18 @@ def run_grade() -> list[dict]:
     postings = get_postings_for_forecast()
     mentions = get_skill_mentions_for_forecast()
     postings_index = {p["id"]: p for p in postings}
+    # Same AUTOMATED_SOURCES scoping as --predict -- grading must use the
+    # identical target universe the forecast was built against, or
+    # "beat_baseline" would be comparing against a definition that quietly
+    # shifted between prediction and grading.
+    automated_postings_index = {
+        pid: p for pid, p in postings_index.items() if p.get("source") in AUTOMATED_SOURCES
+    }
 
     mustakbil_postings = [p for p in postings if p.get("source") == "mustakbil"]
     volume_actual = _count_in_week(mustakbil_postings, complete_week_start)
 
-    skill_ids = _skill_posting_ids(mentions, postings_index, exclude_bulk=True)
+    skill_ids = _skill_posting_ids(mentions, automated_postings_index, exclude_bulk=True)
 
     now_iso = now_utc.isoformat()
     graded_rows: list[dict] = []
@@ -370,7 +405,7 @@ def run_grade() -> list[dict]:
             actual = volume_actual
         else:
             ids = skill_ids.get(row["target_key"], set())
-            actual = _count_distinct_in_week(ids, postings_index, complete_week_start)
+            actual = _count_distinct_in_week(ids, automated_postings_index, complete_week_start)
 
         predicted = float(row["predicted"])
         baseline_predicted = float(row["baseline_predicted"])

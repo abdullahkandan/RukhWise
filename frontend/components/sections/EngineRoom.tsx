@@ -246,7 +246,7 @@ export async function EngineRoom() {
 
           <p className="mt-6 font-sans text-xs text-java/45">
             Volume forecasts cover automated collection only (Mustakbil); skill forecasts cover
-            all sources, excluding the bulk poster.
+            automated sources, excluding the bulk poster.
           </p>
         </ScrollReveal>
       </div>
