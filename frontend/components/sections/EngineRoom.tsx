@@ -1,7 +1,10 @@
 import {
+  getBacktestSummary,
   getForecastsAccuracy,
   getForecastsPending,
   getSystemHealth,
+  type BacktestSummaryResponse,
+  type BacktestTargetSummary,
   type ForecastsAccuracyResponse,
   type ForecastsPendingResponse,
   type GradedForecast,
@@ -38,6 +41,20 @@ async function safeGetForecastsAccuracy(): Promise<ForecastsAccuracyResponse> {
         beat_baseline_rate_overall: null,
         beat_baseline_rate_by_type: {},
       },
+    };
+  }
+}
+
+async function safeGetBacktestSummary(): Promise<BacktestSummaryResponse> {
+  try {
+    return await getBacktestSummary();
+  } catch {
+    return {
+      n_weeks: 0,
+      n_rows: 0,
+      source_scope: null,
+      overall: { n: 0, beat: 0, tie: 0, lost: 0, beat_rate: null, mae: null },
+      by_target: [],
     };
   }
 }
@@ -107,11 +124,39 @@ function GradedRow({ forecast, index }: { forecast: GradedForecast; index: numbe
   );
 }
 
+function BacktestTargetRow({ target, index }: { target: BacktestTargetSummary; index: number }) {
+  return (
+    <ScrollReveal
+      index={index}
+      staggerMs={60}
+      className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-dashed border-cerulean/30 py-4 first:border-t-0 sm:grid-cols-[1.3fr_1fr_1fr_1fr_1fr_1fr]"
+    >
+      <p className="col-span-2 font-sans text-sm text-java/90 sm:col-span-1">{target.display}</p>
+      <p className="font-mono text-xs tabular-nums text-java/50">
+        <span className="text-java/35">n </span>{target.n}
+      </p>
+      <p className="font-mono text-xs tabular-nums text-java/50">
+        <span className="text-java/35">mae </span>{target.mae !== null ? target.mae.toFixed(2) : "—"}
+      </p>
+      <p className="font-mono text-xs tabular-nums text-sceptre-bright">
+        <span className="text-java/35">beat </span>{target.beat}
+      </p>
+      <p className="font-mono text-xs tabular-nums text-java/45">
+        <span className="text-java/35">tie </span>{target.tie}
+      </p>
+      <p className="font-mono text-xs tabular-nums text-java/35">
+        <span className="text-java/35">lost </span>{target.lost}
+      </p>
+    </ScrollReveal>
+  );
+}
+
 export async function EngineRoom() {
-  const [health, pending, accuracy] = await Promise.all([
+  const [health, pending, accuracy, backtest] = await Promise.all([
     getSystemHealth(),
     safeGetForecastsPending(),
     safeGetForecastsAccuracy(),
+    safeGetBacktestSummary(),
   ]);
   const sources = Object.entries(health.last_successful_run_per_source);
   const beatRate = accuracy.summary.beat_baseline_rate_overall;
@@ -260,6 +305,66 @@ export async function EngineRoom() {
             Volume forecasts cover automated collection only (Mustakbil); skill forecasts cover
             automated sources, excluding the bulk poster.
           </p>
+        </ScrollReveal>
+
+        {/* BACKTEST -- retrospective only, deliberately below and visually
+            distinct from PENDING/GRADED LOG above: a dashed cerulean border
+            and diagonal hatch fill instead of the solid java/cream/soil
+            registers used everywhere else in this room, so this can never
+            be misread as more live-forecast evidence. */}
+        <ScrollReveal
+          index={sources.length + 5}
+          staggerMs={70}
+          className="border border-dashed border-cerulean/50 bg-[repeating-linear-gradient(135deg,rgba(165,188,214,0.12)_0px,rgba(165,188,214,0.12)_1px,transparent_1px,transparent_12px)] px-6 py-8 md:px-10 md:py-10"
+        >
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-cerulean">
+            Backtest — retrospective
+          </p>
+          <h3 className="mt-3 max-w-xl font-display text-lg font-medium leading-relaxed md:text-xl">
+            Would the model have worked, in hindsight?
+          </h3>
+          <p className="mt-3 max-w-xl font-sans text-sm text-java/60">
+            Computed after outcomes were already known, over every historical week with prior
+            Mustakbil history — this is weaker evidence than the log above. A backtest shows
+            whether the model has any skill at all; only the live forecast log proves a
+            prediction was made before the outcome existed.
+          </p>
+
+          {backtest.n_rows > 0 ? (
+            <>
+              <div className="mt-6 flex flex-wrap items-end justify-between gap-6 border-t border-dashed border-cerulean/30 pt-6">
+                <div>
+                  <p className="font-mono text-xs uppercase tracking-widest text-java/50">
+                    {backtest.n_weeks} week{backtest.n_weeks === 1 ? "" : "s"} backtested
+                  </p>
+                  <p className="mt-1 font-mono text-xs text-java/40">
+                    source_scope {backtest.source_scope ?? "—"}
+                  </p>
+                </div>
+                {backtest.overall.beat_rate !== null && (
+                  <div className="text-right">
+                    <p className="font-mono text-4xl font-semibold tabular-nums text-cerulean">
+                      {formatPercent(backtest.overall.beat_rate)}
+                    </p>
+                    <p className="font-mono text-xs uppercase tracking-widest text-java/50">
+                      beat baseline (retrospective)
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-2">
+                {backtest.by_target.map((t, i) => (
+                  <BacktestTargetRow key={`${t.target_type}-${t.target_key}`} target={t} index={i} />
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="mt-6 font-sans text-sm text-java/60">
+              No backtest computed yet — run <code>python backtest.py</code> once Mustakbil has at
+              least two complete weeks of history.
+            </p>
+          )}
         </ScrollReveal>
       </div>
     </div>

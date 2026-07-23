@@ -655,5 +655,63 @@ def grade_forecast_row(
         return False
 
 
+# --------------------------------------------------------------------------
+# Backtesting (backtest.py) -- a separate table from forecasts on purpose.
+# backtests is a fully mutable, re-computed-from-scratch derived artifact
+# (retrospective evidence of whether the model has any skill at all);
+# forecasts is an append-only, immutable record of predictions made before
+# outcomes existed. The two must never be mixed -- see backtest.py's module
+# docstring. The backtests table's own migration SQL (schema only, no
+# immutability trigger) is printed by hand, the same one-time pattern the
+# forecasts table and its source_scope column followed.
+# --------------------------------------------------------------------------
+
+def truncate_backtests() -> int:
+    """Delete every row in backtests. Called at the start of every
+    backtest.py run -- backtests are always fully recomputed, never
+    incrementally updated, so stale rows from a prior run (e.g. a since-
+    retired skill that's no longer in the top 12) must not linger.
+    Returns the number of rows deleted."""
+    client = _get_client()
+    result = client.table("backtests").delete().gte("id", 0).execute()
+    return len(result.data or [])
+
+
+def insert_backtests(rows: list[dict]) -> dict:
+    """Batch insert backtests rows (call after truncate_backtests()).
+    Upsert rather than plain insert, keyed on the same
+    (model_version, target_type, target_key, target_week_start) shape
+    forecasts uses -- a defensive idempotency backstop only, since the
+    table should already be empty; on conflict, overwrite (this is a
+    derived artifact, not a historical record, so a repeated row losing
+    to a fresher computation is correct behavior, unlike forecasts'
+    ignore_duplicates).
+
+    Returns {"inserted": int, "failed": int}.
+    """
+    if not rows:
+        return {"inserted": 0, "failed": 0}
+
+    client = _get_client()
+    inserted = 0
+    failed = 0
+
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = rows[i : i + _BATCH_SIZE]
+        try:
+            result = (
+                client.table("backtests")
+                .upsert(batch, on_conflict="model_version,target_type,target_key,target_week_start")
+                .execute()
+            )
+            inserted += len(result.data or [])
+        except Exception as exc:
+            logger.error(f"Batch backtests insert failed ({len(batch)} rows): {exc}")
+            failed += len(batch)
+
+    logger.info(f"insert_backtests: inserted={inserted} failed={failed}")
+    return {"inserted": inserted, "failed": failed}
+
+
 if __name__ == "__main__":
     print_schema_sql()

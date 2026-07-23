@@ -1581,6 +1581,108 @@ def forecasts_accuracy():
 
 
 # --------------------------------------------------------------------------
+# GET /backtest/summary, GET /backtest/detail
+#
+# backtests is a SEPARATE table from forecasts, read via its own
+# queries.get_backtests() -- never mixed with /forecasts/pending or
+# /forecasts/accuracy above. It is retrospective evidence only: computed
+# after outcomes were already known, fully mutable and re-runnable (see
+# backtest.py's module docstring). A backtest shows whether the model has
+# any skill at all; only /forecasts/accuracy proves a prediction was made
+# before its outcome existed. Never present these numbers as live forecast
+# performance.
+# --------------------------------------------------------------------------
+
+def _backtest_outcome_counts(rows: list[dict]) -> dict:
+    beat = sum(1 for r in rows if r["outcome"] == "beat")
+    tie = sum(1 for r in rows if r["outcome"] == "tie")
+    lost = sum(1 for r in rows if r["outcome"] == "lost")
+    return {
+        "n": len(rows),
+        "beat": beat,
+        "tie": tie,
+        "lost": lost,
+        "beat_rate": round(beat / len(rows), 4) if rows else None,
+        "mae": round(statistics.fmean(r["abs_error"] for r in rows), 4) if rows else None,
+    }
+
+
+@app.get("/backtest/summary")
+@cached()
+def backtest_summary():
+    taxonomy = queries.get_taxonomy()
+    rows = queries.get_backtests()
+
+    if not rows:
+        return {
+            "n_weeks": 0,
+            "n_rows": 0,
+            "source_scope": None,
+            "overall": _backtest_outcome_counts([]),
+            "by_target": [],
+        }
+
+    source_scope = rows[0].get("source_scope")
+    n_weeks = len({r["target_week_start"] for r in rows})
+
+    by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for r in rows:
+        by_key[(r["target_type"], r["target_key"])].append(r)
+
+    by_target = [
+        {
+            "target_type": target_type,
+            "target_key": target_key,
+            "display": _forecast_display(target_type, target_key, taxonomy),
+            **_backtest_outcome_counts(subset),
+        }
+        for (target_type, target_key), subset in by_key.items()
+    ]
+    by_target.sort(key=lambda t: (t["target_type"], -t["n"], t["target_key"]))
+
+    return {
+        "n_weeks": n_weeks,
+        "n_rows": len(rows),
+        "source_scope": source_scope,
+        "overall": _backtest_outcome_counts(rows),
+        "by_target": by_target,
+    }
+
+
+@app.get("/backtest/detail")
+@cached()
+def backtest_detail():
+    """Every backtests row, most recent target week first."""
+    taxonomy = queries.get_taxonomy()
+    rows = queries.get_backtests()
+    rows = sorted(
+        rows, key=lambda r: (r["target_week_start"], r["target_type"], r["target_key"]), reverse=True
+    )
+
+    return {
+        "count": len(rows),
+        "backtests": [
+            {
+                "target_type": r["target_type"],
+                "target_key": r["target_key"],
+                "display": _forecast_display(r["target_type"], r["target_key"], taxonomy),
+                "target_week_start": r["target_week_start"],
+                "model_version": r["model_version"],
+                "predicted": r["predicted"],
+                "baseline_predicted": r["baseline_predicted"],
+                "actual": r["actual"],
+                "abs_error": r["abs_error"],
+                "baseline_abs_error": r["baseline_abs_error"],
+                "outcome": r["outcome"],
+                "source_scope": r["source_scope"],
+                "computed_at": r["computed_at"],
+            }
+            for r in rows
+        ],
+    }
+
+
+# --------------------------------------------------------------------------
 # GET / -- minimal liveness/index, not part of the spec but near-zero cost
 # --------------------------------------------------------------------------
 
@@ -1595,6 +1697,7 @@ def root():
             "/cities/breakdown", "/salaries/summary", "/coverage",
             "/companies/top", "/companies/{name}",
             "/forecasts/pending", "/forecasts/accuracy",
+            "/backtest/summary", "/backtest/detail",
             "/insights/live", "/system/health",
         ],
     }

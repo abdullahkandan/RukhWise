@@ -512,3 +512,67 @@ export interface ForecastsAccuracyResponse {
 export function getForecastsAccuracy() {
   return apiFetch<ForecastsAccuracyResponse>("/forecasts/accuracy");
 }
+
+// ---------------------------------------------------------------------------
+// /backtest/summary & /backtest/detail
+//
+// A SEPARATE feature from /forecasts/pending and /forecasts/accuracy above --
+// backtests are retrospective (computed after outcomes were already known),
+// fully mutable, and re-computed from scratch on every `python backtest.py`
+// run. Never merge these types/responses with the forecast ones; the /engine
+// UI keeps them in a visually distinct section for the same reason.
+// ---------------------------------------------------------------------------
+
+export type BacktestOutcome = "beat" | "tie" | "lost";
+
+export interface BacktestOutcomeCounts {
+  n: number;
+  beat: number;
+  tie: number;
+  lost: number;
+  beat_rate: number | null;
+  mae: number | null;
+}
+
+export interface BacktestTargetSummary extends BacktestOutcomeCounts {
+  target_type: ForecastTargetType;
+  target_key: string;
+  display: string;
+}
+
+export interface BacktestSummaryResponse {
+  n_weeks: number;
+  n_rows: number;
+  source_scope: string | null;
+  overall: BacktestOutcomeCounts;
+  by_target: BacktestTargetSummary[];
+}
+
+export function getBacktestSummary() {
+  return apiFetch<BacktestSummaryResponse>("/backtest/summary");
+}
+
+export interface BacktestRow {
+  target_type: ForecastTargetType;
+  target_key: string;
+  display: string;
+  target_week_start: string;
+  model_version: string;
+  predicted: number;
+  baseline_predicted: number;
+  actual: number;
+  abs_error: number;
+  baseline_abs_error: number;
+  outcome: BacktestOutcome;
+  source_scope: string | null;
+  computed_at: string;
+}
+
+export interface BacktestDetailResponse {
+  count: number;
+  backtests: BacktestRow[];
+}
+
+export function getBacktestDetail() {
+  return apiFetch<BacktestDetailResponse>("/backtest/detail");
+}

@@ -45,6 +45,7 @@ RLS_SQL = """\
 alter table postings enable row level security;
 alter table skill_mentions enable row level security;
 alter table forecasts enable row level security;
+alter table backtests enable row level security;
 
 drop policy if exists "public read" on postings;
 create policy "public read" on postings for select using (true);
@@ -54,6 +55,9 @@ create policy "public read" on skill_mentions for select using (true);
 
 drop policy if exists "public read" on forecasts;
 create policy "public read" on forecasts for select using (true);
+
+drop policy if exists "public read" on backtests;
+create policy "public read" on backtests for select using (true);
 """
 
 
@@ -116,6 +120,23 @@ def get_forecasts() -> list[dict]:
     outside this read-only API); this is a plain public-read select, same
     as every other table here."""
     return _fetch_all("forecasts", FORECAST_COLUMNS)
+
+
+BACKTEST_COLUMNS = (
+    "id,run_id,created_at,computed_at,is_retrospective,model_version,target_type,"
+    "target_key,target_week_start,predicted,interval_low,interval_high,"
+    "baseline_predicted,actual,abs_error,baseline_abs_error,outcome,beat_baseline,"
+    "source_scope"
+)
+
+
+@cached()
+def get_backtests() -> list[dict]:
+    """Every backtests row -- a separate table from forecasts, written only
+    by backtest.py (service-role key). Fully mutable/re-computed-from-
+    scratch on every run, unlike forecasts' append-only history; see
+    backtest.py's module docstring for why the two must never be mixed."""
+    return _fetch_all("backtests", BACKTEST_COLUMNS)
 
 
 if __name__ == "__main__":
