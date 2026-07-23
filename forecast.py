@@ -20,7 +20,12 @@
 
 Requires the forecasts table + immutability trigger + RLS to already exist
 (see the migration SQL this feature shipped with -- run once, by hand, in
-the Supabase SQL editor; not applied by this script).
+the Supabase SQL editor; not applied by this script). forecasts.source_scope
+(added in a later migration, also immutable) records, per row, the exact
+comma-separated source set that row's actual/prediction was computed
+against -- read back and used verbatim at grading time, never re-derived
+from today's AUTOMATED_SOURCES, so a source added after a row was predicted
+never retroactively changes what that row is graded against.
 
 Methodology is fixed by design, not reconfigurable via flags:
   - PKT weeks run Monday 00:00 to Sunday 23:59:59.999999 (PKT = UTC+5, no
@@ -71,7 +76,10 @@ BULK_COMPANY_KEY = "naseeb enterprise inc"  # normalized: whitespace-collapsed, 
 # so first_seen_at is a trustworthy proxy for posting recency. Rozee
 # (session-based) and LinkedIn (staleness, see jobspy_source.py) are
 # excluded from forecasting entirely, not merely bulk-poster-excluded.
-AUTOMATED_SOURCES = {"mustakbil", "indeed"}
+# A tuple, not a set: iteration order must be deterministic (feeds directly
+# into the source_scope string stored on every row), which a set does not
+# guarantee.
+AUTOMATED_SOURCES = ("mustakbil", "indeed")
 TOP_SKILLS_COUNT = 12
 MEAN_WINDOW_WEEKS = 3
 INTERVAL_WINDOW_WEEKS = 4
@@ -85,6 +93,14 @@ MODEL_NAME = "trailing_mean_3w_v1"
 
 def _normalize_company(name: str | None) -> str:
     return " ".join((name or "").split()).casefold()
+
+
+def _source_scope_string(sources) -> str:
+    return ",".join(sources)
+
+
+def _parse_source_scope(value: str) -> set[str]:
+    return {s.strip() for s in value.split(",") if s.strip()}
 
 
 def _parse_ts(value: str) -> datetime:
@@ -215,6 +231,7 @@ def _build_forecast_row(
     target_week_start_utc: datetime,
     mean_counts: list[int],
     interval_counts: list[int],
+    source_scope: str,
 ) -> dict:
     shorthist = len(mean_counts) < MEAN_WINDOW_WEEKS
     model_version = MODEL_NAME + ("_shorthist" if shorthist else "")
@@ -239,6 +256,7 @@ def _build_forecast_row(
         "interval_low": round(interval_low, 4),
         "interval_high": round(interval_high, 4),
         "baseline_predicted": round(float(baseline_predicted), 4),
+        "source_scope": source_scope,
     }
 
 
@@ -289,6 +307,11 @@ def run_predict() -> list[dict]:
         skill_interval_weeks = _weeks_history(complete_week_start, INTERVAL_WINDOW_WEEKS, automated_earliest_week)
 
     run_id = f"forecast-{now_utc:%Y%m%dT%H%M%S}"
+    # Every row logged this run is stamped with the CURRENT AUTOMATED_SOURCES
+    # set, never hardcoded -- this is the provenance record grading later
+    # reads back verbatim instead of re-deriving from whatever
+    # AUTOMATED_SOURCES happens to be at grading time.
+    current_scope = _source_scope_string(AUTOMATED_SOURCES)
     candidates: list[dict] = []
 
     # ---- volume/all (Mustakbil only) --------------------------------
@@ -296,7 +319,9 @@ def run_predict() -> list[dict]:
         mean_counts = [_count_in_week(mustakbil_postings, w) for w in volume_mean_weeks]
         interval_counts = [_count_in_week(mustakbil_postings, w) for w in volume_interval_weeks]
         candidates.append(
-            _build_forecast_row(run_id, "volume", "all", target_week_start, mean_counts, interval_counts)
+            _build_forecast_row(
+                run_id, "volume", "all", target_week_start, mean_counts, interval_counts, current_scope
+            )
         )
     else:
         logger.warning("No complete week of Mustakbil history yet -- skipping volume/all this run")
@@ -315,7 +340,9 @@ def run_predict() -> list[dict]:
             mean_counts = [_count_distinct_in_week(ids, automated_postings_index, w) for w in skill_mean_weeks]
             interval_counts = [_count_distinct_in_week(ids, automated_postings_index, w) for w in skill_interval_weeks]
             candidates.append(
-                _build_forecast_row(run_id, "skill", skill, target_week_start, mean_counts, interval_counts)
+                _build_forecast_row(
+                    run_id, "skill", skill, target_week_start, mean_counts, interval_counts, current_scope
+                )
             )
     elif automated_postings:
         logger.warning("No complete week of AUTOMATED_SOURCES history yet -- skipping all skill targets this run")
@@ -338,7 +365,7 @@ def _print_predict_table(rows: list[dict]) -> None:
 
     rows = sorted(rows, key=lambda r: (r["target_type"], r["target_key"]))
     headers = ["target_type", "target_key", "target_week_start", "model_version",
-               "predicted", "interval_low", "interval_high", "baseline_predicted"]
+               "predicted", "interval_low", "interval_high", "baseline_predicted", "source_scope"]
     widths = [max(len(h), max(len(str(r.get(h, ""))) for r in rows)) for h in headers]
 
     def fmt_row(values: list[str]) -> str:
@@ -384,28 +411,53 @@ def run_grade() -> list[dict]:
     postings = get_postings_for_forecast()
     mentions = get_skill_mentions_for_forecast()
     postings_index = {p["id"]: p for p in postings}
-    # Same AUTOMATED_SOURCES scoping as --predict -- grading must use the
-    # identical target universe the forecast was built against, or
-    # "beat_baseline" would be comparing against a definition that quietly
-    # shifted between prediction and grading.
-    automated_postings_index = {
-        pid: p for pid, p in postings_index.items() if p.get("source") in AUTOMATED_SOURCES
-    }
 
     mustakbil_postings = [p for p in postings if p.get("source") == "mustakbil"]
     volume_actual = _count_in_week(mustakbil_postings, complete_week_start)
 
-    skill_ids = _skill_posting_ids(mentions, automated_postings_index, exclude_bulk=True)
+    # Skill actuals are computed per-row against THAT row's own recorded
+    # source_scope -- never today's AUTOMATED_SOURCES. A row predicted
+    # under an older scope (e.g. the pre-Indeed 'mustakbil,rozee' rows)
+    # must stay graded against exactly that population, or beat_baseline
+    # would silently compare against a universe the forecast never saw.
+    # Cached per distinct scope string since rows from the same --predict
+    # run (the common case) all share one scope.
+    _scope_cache: dict[str, tuple[dict[str, set[str]], dict[str, dict]]] = {}
+
+    def _skill_ids_for_scope(scope_str: str) -> tuple[dict[str, set[str]], dict[str, dict]]:
+        if scope_str not in _scope_cache:
+            scope_sources = _parse_source_scope(scope_str)
+            scoped_index = {pid: p for pid, p in postings_index.items() if p.get("source") in scope_sources}
+            _scope_cache[scope_str] = (_skill_posting_ids(mentions, scoped_index, exclude_bulk=True), scoped_index)
+        return _scope_cache[scope_str]
 
     now_iso = now_utc.isoformat()
     graded_rows: list[dict] = []
 
     for row in ungraded:
+        row_scope = row.get("source_scope")
+        if not row_scope:
+            # Should be unreachable -- the migration backfills a default
+            # and --predict always sets this explicitly -- but a missing
+            # scope must never silently fall back to today's
+            # AUTOMATED_SOURCES, that's precisely the bug this column
+            # exists to prevent. Loud warning, best-effort continue.
+            row_scope = _source_scope_string(AUTOMATED_SOURCES)
+            logger.warning(
+                f"forecasts.id={row['id']} has no source_scope -- falling back to current "
+                f"AUTOMATED_SOURCES ({row_scope}), which may not match what it was predicted under"
+            )
+
         if row["target_type"] == "volume":
+            # Volume stays permanently mustakbil-only regardless of
+            # source_scope -- source_scope records the pipeline's
+            # automated-source set at prediction time, it does not
+            # override volume's own fixed methodology.
             actual = volume_actual
         else:
-            ids = skill_ids.get(row["target_key"], set())
-            actual = _count_distinct_in_week(ids, automated_postings_index, complete_week_start)
+            scope_skill_ids, scope_postings_index = _skill_ids_for_scope(row_scope)
+            ids = scope_skill_ids.get(row["target_key"], set())
+            actual = _count_distinct_in_week(ids, scope_postings_index, complete_week_start)
 
         predicted = float(row["predicted"])
         baseline_predicted = float(row["baseline_predicted"])
@@ -424,6 +476,7 @@ def run_grade() -> list[dict]:
         if ok:
             graded_rows.append({
                 **row,
+                "source_scope": row_scope,  # the value actually used, in case row lacked one
                 "actual": actual,
                 "abs_error": abs_error,
                 "baseline_abs_error": baseline_abs_error,
@@ -438,8 +491,8 @@ def run_grade() -> list[dict]:
     for r in graded_rows:
         mark = "beat baseline" if r["beat_baseline"] else "did not beat baseline"
         print(
-            f"{r['target_type']:<7} {r['target_key']:<20} actual={r['actual']:<6} "
-            f"predicted={r['predicted']:<8} baseline={r['baseline_predicted']:<8} "
+            f"{r['target_type']:<7} {r['target_key']:<20} scope={r['source_scope']:<18} "
+            f"actual={r['actual']:<6} predicted={r['predicted']:<8} baseline={r['baseline_predicted']:<8} "
             f"abs_error={r['abs_error']:<8} ({mark})"
         )
 

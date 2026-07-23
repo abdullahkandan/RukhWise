@@ -105,7 +105,7 @@ def get_taxonomy() -> dict:
 FORECAST_COLUMNS = (
     "id,run_id,created_at,model_version,target_type,target_key,target_week_start,"
     "predicted,interval_low,interval_high,baseline_predicted,actual,graded_at,"
-    "abs_error,baseline_abs_error,beat_baseline"
+    "abs_error,baseline_abs_error,beat_baseline,source_scope"
 )
 
 

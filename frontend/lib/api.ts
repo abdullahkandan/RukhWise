@@ -464,6 +464,7 @@ export interface PendingForecast {
   baseline_predicted: number;
   created_at: string;
   run_id: string;
+  source_scope: string | null;
 }
 
 export interface ForecastsPendingResponse {
@@ -493,6 +494,7 @@ export interface GradedForecast {
   beat_baseline: boolean;
   pct_error: number | null;
   graded_at: string;
+  source_scope: string | null;
 }
 
 export interface ForecastsAccuracySummary {

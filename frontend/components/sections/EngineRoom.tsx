@@ -75,12 +75,17 @@ function PendingRow({ forecast, index }: { forecast: PendingForecast; index: num
   );
 }
 
+function formatSourceScope(scope: string | null): string {
+  if (!scope) return "—";
+  return scope.split(",").map((s) => s.trim()).filter(Boolean).join(" + ");
+}
+
 function GradedRow({ forecast, index }: { forecast: GradedForecast; index: number }) {
   return (
     <ScrollReveal
       index={index}
       staggerMs={60}
-      className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-java/15 py-4 first:border-t-0 sm:grid-cols-[1.6fr_1fr_1fr_1fr_1fr]"
+      className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-java/15 py-4 first:border-t-0 sm:grid-cols-[1.3fr_1fr_1fr_1fr_1fr_1.2fr]"
     >
       <p className="col-span-2 font-sans text-sm text-java/90 sm:col-span-1">{forecast.display}</p>
       <p className="font-mono text-xs tabular-nums text-java/50">
@@ -94,6 +99,9 @@ function GradedRow({ forecast, index }: { forecast: GradedForecast; index: numbe
       </p>
       <p className={`font-mono text-xs ${forecast.beat_baseline ? "text-sceptre-bright" : "text-java/35"}`}>
         {forecast.beat_baseline ? "beat baseline" : "did not beat baseline"}
+      </p>
+      <p className="font-mono text-xs text-java/40">
+        <span className="text-java/35">scope </span>{formatSourceScope(forecast.source_scope)}
       </p>
     </ScrollReveal>
   );
@@ -245,6 +253,10 @@ export async function EngineRoom() {
           )}
 
           <p className="mt-6 font-sans text-xs text-java/45">
+            Forecasts are graded against the data sources they were computed from; sources added
+            later do not retroactively change past grades.
+          </p>
+          <p className="mt-2 font-sans text-xs text-java/45">
             Volume forecasts cover automated collection only (Mustakbil); skill forecasts cover
             automated sources, excluding the bulk poster.
           </p>

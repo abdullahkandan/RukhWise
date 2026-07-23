@@ -620,7 +620,7 @@ def get_ungraded_forecasts(target_week_start: str) -> list[dict]:
     client = _get_client()
     res = (
         client.table("forecasts")
-        .select("id,target_type,target_key,target_week_start,predicted,baseline_predicted,model_version")
+        .select("id,target_type,target_key,target_week_start,predicted,baseline_predicted,model_version,source_scope")
         .eq("target_week_start", target_week_start)
         .is_("graded_at", "null")
         .execute()

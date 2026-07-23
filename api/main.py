@@ -1512,6 +1512,7 @@ def forecasts_pending():
             "baseline_predicted": f["baseline_predicted"],
             "created_at": f["created_at"],
             "run_id": f["run_id"],
+            "source_scope": f.get("source_scope"),
         }
         for f in pending
     ]
@@ -1551,6 +1552,7 @@ def forecasts_accuracy():
             "beat_baseline": f["beat_baseline"],
             "pct_error": pct_error,
             "graded_at": f["graded_at"],
+            "source_scope": f.get("source_scope"),
         })
 
     count_graded = len(graded)
