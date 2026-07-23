@@ -542,6 +542,31 @@ def get_postings_for_forecast() -> list[dict]:
     return rows
 
 
+def get_postings_for_drift() -> list[dict]:
+    """id, source, company, title, description, skills_raw for every
+    posting -- what drift.py needs: description text for n-gram mining,
+    plus title/skills_raw so it can run the existing taxonomy matcher
+    (extract_skills.extract_skills) for its depth metric (total vs.
+    substantive taxonomy matches per posting), the same three fields that
+    function already expects. Read-only; drift.py never writes anywhere."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("postings")
+            .select("id,source,company,title,description,skills_raw")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
 def get_skill_mentions_for_forecast() -> list[dict]:
     """posting_id, skill for every skill_mentions row."""
     client = _get_client()
