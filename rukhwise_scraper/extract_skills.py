@@ -1,4 +1,4 @@
-"""Skill extraction: matches taxonomy_v1.yaml aliases against posting text.
+"""Skill extraction: matches taxonomy_v2.yaml aliases against posting text.
 
 Each posting reports a skill at most once in the output, regardless of how
 many times an alias appears in its text -- this is deliberate defense
@@ -6,6 +6,16 @@ against templated postings (the same job text, and therefore the same
 skill phrase, repeated verbatim across many near-identical listings from
 one employer) inflating mention counts. extract_skills only needs to
 answer "does this posting mention X," not "how many times."
+
+v2 adds requirement_type (skill | credential | experience | language |
+attribute) alongside category on every entry -- see skill_requirement_type()
+below and output/taxonomy_v2_spec.md. Credential and experience are NOT
+taxonomy entries (they're structured postings columns, see
+structured_extraction.py); only language and attribute are new here,
+matched via the exact same alias mechanism as v1's 96 skills. This module
+never touches taxonomy_v1.yaml, which stays in place, untouched, as the
+historical record extraction_method='taxonomy_v1' rows were computed
+against.
 """
 
 from __future__ import annotations
@@ -20,7 +30,7 @@ from config import setup_logging
 
 logger = setup_logging()
 
-TAXONOMY_PATH = Path(__file__).parent / "taxonomy_v1.yaml"
+TAXONOMY_PATH = Path(__file__).parent / "taxonomy_v2.yaml"
 
 
 def _load_taxonomy() -> dict:
@@ -86,6 +96,16 @@ _SKILL_PATTERNS = _build_skill_patterns(_TAXONOMY)
 def skill_category(skill_key: str) -> str | None:
     spec = _TAXONOMY["skills"].get(skill_key)
     return spec["category"] if spec else None
+
+
+def skill_requirement_type(skill_key: str) -> str:
+    """skill | credential | experience | language | attribute for a
+    matched skill key. Defaults to 'skill' for any entry that predates
+    v2's requirement_type field (should be unreachable -- taxonomy_v2.yaml
+    sets it explicitly on all 114 entries -- but a matched skill absent
+    from the taxonomy at lookup time must never crash extraction)."""
+    spec = _TAXONOMY["skills"].get(skill_key)
+    return (spec or {}).get("requirement_type", "skill")
 
 
 def _skills_raw_to_text(skills_raw) -> str:

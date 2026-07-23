@@ -1,0 +1,668 @@
+# Rukhwise skill taxonomy v2
+#
+# Extends v1 (96 skills, 11 categories) with requirement_type, a second
+# axis alongside category: skill | credential | experience | language |
+# attribute. All 96 v1 entries are requirement_type: skill, unchanged
+# otherwise -- taxonomy_v1.yaml is left in place, untouched, as the
+# historical record extraction_method='taxonomy_v1' rows were computed
+# against (see output/taxonomy_v2_spec.md).
+#
+# Credentials (degree level/field, certification) and experience
+# (min/max years, level) are DELIBERATELY NOT taxonomy entries here --
+# they are structured columns on postings, extracted by
+# structured_extraction.py. "Bachelor's" / "bachelor's degree" / "bachelor's
+# degree in computer" are one fact about a posting, not three taxonomy
+# hits; "3 years" / "2-3 years" are the same field at different values,
+# and an n-gram-shaped taxonomy entry can't carry range semantics. Only
+# language and attribute (work_arrangement) are new taxonomy entries.
+#
+# 96 canonical skills across 11 categories. Aliases are matched as whole
+# words/phrases (see extract_skills.py) against posting title + description
+# + skills_raw text -- casing doesn't matter, but the phrase must appear as
+# a standalone token sequence, not as a substring inside another word.
+#
+# `signal` on a category is a downstream hint for consumers of extracted
+# skills, not something extract_skills.py itself uses: soft skills are
+# near-universal in job postings (almost every listing says "communication"
+# somewhere) and carry weak differentiation value on their own, so they're
+# marked `low`. Everything else is `normal`.
+
+categories:
+  programming: {signal: normal}
+  analytics_bi: {signal: normal}
+  data_ml: {signal: normal}
+  marketing_tech: {signal: normal}
+  web_ecommerce: {signal: normal}
+  enterprise_erp: {signal: normal}
+  cloud_devops: {signal: normal}
+  design: {signal: normal}
+  accounting_finance: {signal: normal}
+  office_admin: {signal: normal}
+  soft: {signal: low}
+  language: {signal: normal}
+  work_arrangement: {signal: normal}
+
+skills:
+
+  # ---------- programming (12) ----------
+  python:
+    display: Python
+    category: programming
+    requirement_type: skill
+    aliases: [python, python3, "python 3"]
+  sql:
+    display: SQL
+    category: programming
+    requirement_type: skill
+    aliases: [sql, t-sql, tsql, pl/sql, plsql, mysql, postgresql, postgres, "sql server", "ms sql", "ms sql server"]
+  javascript:
+    display: JavaScript
+    category: programming
+    requirement_type: skill
+    aliases: [javascript, "java script", js, ecmascript]
+  java:
+    display: Java
+    category: programming
+    requirement_type: skill
+    aliases: [java, "core java"]
+  php:
+    display: PHP
+    category: programming
+    requirement_type: skill
+    aliases: [php]
+  "c++":
+    display: C++
+    category: programming
+    requirement_type: skill
+    aliases: ["c++", cpp, "c/c++"]
+  "c#":
+    display: C#
+    category: programming
+    requirement_type: skill
+    aliases: ["c#", csharp, "c sharp"]
+  r:
+    display: R
+    category: programming
+    requirement_type: skill
+    # Bare "r" was dropped after extraction testing: every match in the
+    # real corpus (6/6) came from "R&D" or a company name ("R&B Logistics"),
+    # not the R language -- the token-boundary regex worked exactly as
+    # designed (isolated token, not a substring), but "R&D" is genuinely
+    # indistinguishable from "R" the language by token shape alone. Keeping
+    # only qualified aliases avoids that 100%-false-positive case.
+    aliases: ["r programming", "r language", rstudio, "r studio"]
+  typescript:
+    display: TypeScript
+    category: programming
+    requirement_type: skill
+    aliases: [typescript, ts]
+  html_css:
+    display: HTML/CSS
+    category: programming
+    requirement_type: skill
+    aliases: [html, css, "html/css", "html & css", "html and css", html5, css3]
+  git:
+    display: Git
+    category: programming
+    requirement_type: skill
+    aliases: [git, github, gitlab, "version control", "git/github"]
+  apis:
+    display: APIs
+    category: programming
+    requirement_type: skill
+    aliases: [api, apis, "rest api", "restful api", "rest apis", "web api", "web apis", "api integration"]
+
+  # ---------- analytics_bi (10) ----------
+  power_bi:
+    display: Power BI
+    category: analytics_bi
+    requirement_type: skill
+    aliases: ["power bi", powerbi, "power-bi", "ms power bi", "microsoft power bi", pbi]
+  tableau:
+    display: Tableau
+    category: analytics_bi
+    requirement_type: skill
+    aliases: [tableau, "tableau desktop", "tableau server"]
+  excel:
+    display: Excel
+    category: analytics_bi
+    requirement_type: skill
+    aliases: [excel, "ms excel", "microsoft excel", "advanced excel", "excel formulas", "pivot tables", "pivot table", vlookup, xlookup]
+  google_analytics:
+    display: Google Analytics
+    category: analytics_bi
+    requirement_type: skill
+    aliases: ["google analytics", ga4, "google analytics 4"]
+  looker:
+    display: Looker
+    category: analytics_bi
+    requirement_type: skill
+    aliases: [looker, "looker studio", "google data studio", "data studio"]
+  data_analysis:
+    display: Data Analysis
+    category: analytics_bi
+    requirement_type: skill
+    aliases: ["data analysis", "data analytics", "data analyst", "analyzing data"]
+  statistics:
+    display: Statistics
+    category: analytics_bi
+    requirement_type: skill
+    aliases: [statistics, "statistical analysis", "statistical modeling", "statistical methods", biostatistics, spss]
+  ab_testing:
+    display: A/B Testing
+    category: analytics_bi
+    requirement_type: skill
+    aliases: ["a/b testing", "ab testing", "a b testing", "split testing", "a/b test"]
+  data_visualization:
+    display: Data Visualization
+    category: analytics_bi
+    requirement_type: skill
+    aliases: ["data visualization", "data viz", dashboards, "dashboard building", "dashboard creation", "dashboard design"]
+  reporting:
+    display: Reporting
+    category: analytics_bi
+    requirement_type: skill
+    aliases: [reporting, "report writing", "report generation", "mis reporting", "business reporting"]
+
+  # ---------- data_ml (8) ----------
+  machine_learning:
+    display: Machine Learning
+    category: data_ml
+    requirement_type: skill
+    aliases: ["machine learning", ml]
+  deep_learning:
+    display: Deep Learning
+    category: data_ml
+    requirement_type: skill
+    aliases: ["deep learning", "neural networks", "neural network"]
+  nlp:
+    display: NLP
+    category: data_ml
+    requirement_type: skill
+    aliases: [nlp, "natural language processing"]
+  pandas:
+    display: Pandas
+    category: data_ml
+    requirement_type: skill
+    aliases: [pandas]
+  numpy:
+    display: NumPy
+    category: data_ml
+    requirement_type: skill
+    aliases: [numpy]
+  tensorflow_pytorch:
+    display: TensorFlow/PyTorch
+    category: data_ml
+    requirement_type: skill
+    aliases: [tensorflow, pytorch, "tensor flow", "py torch", keras]
+  etl:
+    display: ETL
+    category: data_ml
+    requirement_type: skill
+    aliases: [etl, "etl pipelines", "extract transform load", "data pipelines", "data pipeline", "etl pipeline"]
+  data_engineering:
+    display: Data Engineering
+    category: data_ml
+    requirement_type: skill
+    aliases: ["data engineering", "data engineer", "data warehousing", "data warehouse", "big data", hadoop, spark, pyspark, bigquery]
+
+  # ---------- marketing_tech (14) ----------
+  crm:
+    display: CRM
+    category: marketing_tech
+    requirement_type: skill
+    aliases: [crm, "customer relationship management", "crm software", "crm systems", "crm tools", "crm records"]
+  hubspot:
+    display: HubSpot
+    category: marketing_tech
+    requirement_type: skill
+    aliases: [hubspot, "hub spot"]
+  zoho:
+    display: Zoho
+    category: marketing_tech
+    requirement_type: skill
+    aliases: [zoho, "zoho crm"]
+  salesforce:
+    display: Salesforce
+    category: marketing_tech
+    requirement_type: skill
+    aliases: [salesforce, "salesforce crm", "salesforce sales cloud", sfdc]
+  moengage:
+    display: MoEngage
+    category: marketing_tech
+    requirement_type: skill
+    aliases: [moengage, "mo engage"]
+  braze:
+    display: Braze
+    category: marketing_tech
+    requirement_type: skill
+    aliases: [braze]
+  clevertap:
+    display: CleverTap
+    category: marketing_tech
+    requirement_type: skill
+    aliases: [clevertap, "clever tap"]
+  seo:
+    display: SEO
+    category: marketing_tech
+    requirement_type: skill
+    aliases: [seo, "search engine optimization", "seo strategy", "on-page seo", "off-page seo", "seo audit"]
+  sem_ppc:
+    display: SEM/PPC
+    category: marketing_tech
+    requirement_type: skill
+    aliases: [sem, ppc, "ppc campaigns", "pay per click", "paid advertising", "google ads", "meta ads", "facebook ads", "search engine marketing"]
+  social_media_marketing:
+    display: Social Media Marketing
+    category: marketing_tech
+    requirement_type: skill
+    aliases: ["social media marketing", "social media management", smm, "social media"]
+  email_marketing:
+    display: Email Marketing
+    category: marketing_tech
+    requirement_type: skill
+    aliases: ["email marketing", "email campaigns", "email marketing campaigns"]
+  content_marketing:
+    display: Content Marketing
+    category: marketing_tech
+    requirement_type: skill
+    aliases: ["content marketing", "content strategy", "content creation", copywriting]
+  digital_marketing:
+    display: Digital Marketing
+    category: marketing_tech
+    requirement_type: skill
+    aliases: ["digital marketing", "online marketing"]
+  marketing_automation:
+    display: Marketing Automation
+    category: marketing_tech
+    requirement_type: skill
+    aliases: ["marketing automation", "marketing automation platforms", "marketing automation tools"]
+
+  # ---------- web_ecommerce (8) ----------
+  wordpress:
+    display: WordPress
+    category: web_ecommerce
+    requirement_type: skill
+    aliases: [wordpress, "word press"]
+  shopify:
+    display: Shopify
+    category: web_ecommerce
+    requirement_type: skill
+    aliases: [shopify, "shopify store", "shopify platform", "shopify management"]
+  amazon_marketplace:
+    display: Amazon Marketplace
+    category: web_ecommerce
+    requirement_type: skill
+    aliases: [amazon, "seller central", "amazon fba", fba, "jungle scout", "helium 10"]
+  ebay:
+    display: eBay
+    category: web_ecommerce
+    requirement_type: skill
+    aliases: [ebay, "ebay seller hub"]
+  daraz:
+    display: Daraz
+    category: web_ecommerce
+    requirement_type: skill
+    aliases: [daraz, "daraz seller"]
+  react:
+    display: React
+    category: web_ecommerce
+    requirement_type: skill
+    aliases: [react, "react.js", reactjs, "react js"]
+  nextjs:
+    display: Next.js
+    category: web_ecommerce
+    requirement_type: skill
+    aliases: ["next.js", nextjs, "next js"]
+  nodejs:
+    display: Node.js
+    category: web_ecommerce
+    requirement_type: skill
+    aliases: ["node.js", nodejs, "node js"]
+
+  # ---------- enterprise_erp (7) ----------
+  sap:
+    display: SAP
+    category: enterprise_erp
+    requirement_type: skill
+    aliases: [sap, "sap erp", "sap fico", "sap mm", "sap hana"]
+  oracle:
+    display: Oracle
+    category: enterprise_erp
+    requirement_type: skill
+    aliases: [oracle, "oracle erp", "oracle db", "oracle database"]
+  tally:
+    display: Tally
+    category: enterprise_erp
+    requirement_type: skill
+    aliases: [tally, "tally erp", "tally.erp9", "tally erp 9", tallyprime]
+  quickbooks:
+    display: QuickBooks
+    category: enterprise_erp
+    requirement_type: skill
+    aliases: [quickbooks, "quick books"]
+  erp:
+    display: ERP
+    category: enterprise_erp
+    requirement_type: skill
+    aliases: [erp, "enterprise resource planning", "erp systems", "erp software"]
+  odoo:
+    display: Odoo
+    category: enterprise_erp
+    requirement_type: skill
+    aliases: [odoo]
+  ms_dynamics:
+    display: MS Dynamics
+    category: enterprise_erp
+    requirement_type: skill
+    aliases: ["ms dynamics", "microsoft dynamics", "dynamics 365", d365, "dynamics crm"]
+
+  # ---------- cloud_devops (7) ----------
+  aws:
+    display: AWS
+    category: cloud_devops
+    requirement_type: skill
+    aliases: [aws, "amazon web services"]
+  azure:
+    display: Azure
+    category: cloud_devops
+    requirement_type: skill
+    aliases: [azure, "microsoft azure", "ms azure"]
+  gcp:
+    display: GCP
+    category: cloud_devops
+    requirement_type: skill
+    aliases: [gcp, "google cloud platform", "google cloud"]
+  docker:
+    display: Docker
+    category: cloud_devops
+    requirement_type: skill
+    aliases: [docker, containerization, containers]
+  kubernetes:
+    display: Kubernetes
+    category: cloud_devops
+    requirement_type: skill
+    aliases: [kubernetes, k8s]
+  linux:
+    display: Linux
+    category: cloud_devops
+    requirement_type: skill
+    aliases: [linux, unix, centos, redhat, "red hat", ubuntu]
+  ci_cd:
+    display: CI/CD
+    category: cloud_devops
+    requirement_type: skill
+    aliases: ["ci/cd", cicd, "ci cd", "continuous integration", "continuous deployment", "continuous delivery", jenkins]
+
+  # ---------- design (6) ----------
+  figma:
+    display: Figma
+    category: design
+    requirement_type: skill
+    aliases: [figma]
+  adobe_photoshop:
+    display: Adobe Photoshop
+    category: design
+    requirement_type: skill
+    aliases: [photoshop, "adobe photoshop"]
+  adobe_illustrator:
+    display: Adobe Illustrator
+    category: design
+    requirement_type: skill
+    # Deliberately excludes bare "ai" -- that's an unrelated, extremely
+    # common false-positive collision with Artificial Intelligence mentions.
+    aliases: [illustrator, "adobe illustrator"]
+  canva:
+    display: Canva
+    category: design
+    requirement_type: skill
+    aliases: [canva]
+  ui_ux:
+    display: UI/UX
+    category: design
+    requirement_type: skill
+    aliases: ["ui/ux", "ux/ui", "ui ux", "ux ui", "user interface", "user experience", "ui design", "ux design", "user experience design"]
+  video_editing:
+    display: Video Editing
+    category: design
+    requirement_type: skill
+    aliases: ["video editing", "video editor", "video production"]
+
+  # ---------- accounting_finance (7) ----------
+  accounting:
+    display: Accounting
+    category: accounting_finance
+    requirement_type: skill
+    aliases: [accounting, accountancy, "basic accounting", "accounting principles", المحاسبة]
+  bookkeeping:
+    display: Bookkeeping
+    category: accounting_finance
+    requirement_type: skill
+    aliases: [bookkeeping, "book keeping"]
+  financial_analysis:
+    display: Financial Analysis
+    category: accounting_finance
+    requirement_type: skill
+    aliases: ["financial analysis", "financial modeling", "basic financial analysis"]
+  audit:
+    display: Audit
+    category: accounting_finance
+    requirement_type: skill
+    aliases: [audit, auditing, "internal audit", "audit planning"]
+  taxation:
+    display: Taxation
+    category: accounting_finance
+    requirement_type: skill
+    aliases: [taxation, tax, "sales tax", "income tax"]
+  payroll:
+    display: Payroll
+    category: accounting_finance
+    requirement_type: skill
+    aliases: [payroll, "payroll processing", "payroll management"]
+  financial_reporting:
+    display: Financial Reporting
+    category: accounting_finance
+    requirement_type: skill
+    aliases: ["financial reporting", "financial statements", "financial reporting and analysis"]
+
+  # ---------- office_admin (5) ----------
+  ms_office:
+    display: MS Office
+    category: office_admin
+    requirement_type: skill
+    aliases: ["ms office", "microsoft office", "office suite", "microsoft office suite"]
+  ms_word:
+    display: MS Word
+    category: office_admin
+    requirement_type: skill
+    # Deliberately excludes bare "word" -- far too common an English word to
+    # use as a standalone alias.
+    aliases: ["ms word", "microsoft word", "word processing"]
+  powerpoint:
+    display: PowerPoint
+    category: office_admin
+    requirement_type: skill
+    aliases: [powerpoint, "power point", "ms powerpoint", "microsoft powerpoint", ppt]
+  google_workspace:
+    display: Google Workspace
+    category: office_admin
+    requirement_type: skill
+    aliases: ["google workspace", gsuite, "g suite", "google docs", "google sheets", "google slides"]
+  data_entry:
+    display: Data Entry
+    category: office_admin
+    requirement_type: skill
+    aliases: ["data entry", "data entry operator", typing]
+
+  # ---------- soft (12) ----------
+  communication:
+    display: Communication
+    category: soft
+    requirement_type: skill
+    aliases: [communication, "communication skills", "verbal communication", "written communication"]
+  teamwork:
+    display: Teamwork
+    category: soft
+    requirement_type: skill
+    aliases: [teamwork, "team work", "team player", collaboration]
+  leadership:
+    display: Leadership
+    category: soft
+    requirement_type: skill
+    aliases: [leadership, "team leadership", "leadership skills"]
+  negotiation:
+    display: Negotiation
+    category: soft
+    requirement_type: skill
+    aliases: [negotiation, "negotiation skills"]
+  problem_solving:
+    display: Problem Solving
+    category: soft
+    requirement_type: skill
+    aliases: ["problem solving", "problem-solving", "analytical thinking", "critical thinking"]
+  time_management:
+    display: Time Management
+    category: soft
+    requirement_type: skill
+    aliases: ["time management", "time-management"]
+  customer_service:
+    display: Customer Service
+    category: soft
+    requirement_type: skill
+    aliases: ["customer service", "customer support", "customer care"]
+  sales_skills:
+    display: Sales Skills
+    category: soft
+    requirement_type: skill
+    aliases: ["sales skills", "sales experience", "closing sales", "sales targets"]
+  presentation:
+    display: Presentation
+    category: soft
+    requirement_type: skill
+    aliases: [presentation, "presentation skills", "presentation design"]
+  project_management:
+    display: Project Management
+    category: soft
+    requirement_type: skill
+    aliases: ["project management", "project coordination", pmp]
+  stakeholder_management:
+    display: Stakeholder Management
+    category: soft
+    requirement_type: skill
+    aliases: ["stakeholder management", "stakeholder engagement", "stakeholder communication", "stakeholder coordination"]
+  english_proficiency:
+    display: English Proficiency
+    category: soft
+    requirement_type: skill
+    aliases: ["english proficiency", "fluent english", "english communication", "spoken english", "written english", "english language"]
+
+  # ---------- language (6) ----------
+  # requirement_type: language -- new in v2. 'english' is deliberately
+  # distinct from v1's soft-skill 'english_proficiency': both can fire on
+  # overlapping text, but they are different claims (v1's is a soft-skill
+  # signal, low differentiation value by design; this is a structured
+  # language requirement). See taxonomy v2 spec section 4.
+  english:
+    display: English
+    category: language
+    requirement_type: language
+    aliases: [english, "spoken english", "written english", "command of english", "communication skills in english", "fluent english"]
+  urdu:
+    display: Urdu
+    category: language
+    requirement_type: language
+    aliases: [urdu]
+  arabic:
+    display: Arabic
+    category: language
+    requirement_type: language
+    aliases: [arabic]
+  punjabi:
+    display: Punjabi
+    category: language
+    requirement_type: language
+    # Zero matches is a valid finding, kept in deliberately -- see spec section 4.
+    aliases: [punjabi]
+  pashto:
+    display: Pashto
+    category: language
+    requirement_type: language
+    aliases: [pashto]
+  sindhi:
+    display: Sindhi
+    category: language
+    requirement_type: language
+    aliases: [sindhi]
+
+  # ---------- work_arrangement (12) ----------
+  # requirement_type: attribute -- new in v2. Canonical forms only (see
+  # taxonomy v2 spec section 5): the 24 Section C attribute n-grams from
+  # the 2026-07-23 drift review were fragments of one boilerplate block
+  # ("Employment Type: Full-Time, Morning Shift, On-site") restated up to
+  # five ways. Matching here relies on extract_skills.py's existing
+  # longest-alias-first + match-once-per-entry design (the same mechanism
+  # v1 already uses for all 96 skills), which already satisfies both
+  # mandatory rules from the spec: longest-match preference within an
+  # entry's own alias list, and at most one mention per posting per
+  # canonical entry regardless of how many alias forms appear.
+  full_time:
+    display: Full-Time
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: ["full-time", "full time", "employment type full-time", permanent]
+  part_time:
+    display: Part-Time
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: ["part-time", "part time"]
+  contract:
+    display: Contract
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: [contractual, "contract basis"]
+  internship:
+    display: Internship
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: [intern, internship]
+  on_site:
+    display: On-Site
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: ["on-site", onsite, "in person", "work location: in person"]
+  remote:
+    display: Remote
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: ["work from home", wfh]
+  hybrid:
+    display: Hybrid
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: [hybrid]
+  morning_shift:
+    display: Morning Shift
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: ["morning shift", "day shift"]
+  night_shift:
+    display: Night Shift
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: ["night shift", graveyard]
+  rotating_shift:
+    display: Rotating Shift
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: [shifts, "rotating shift"]
+  own_vehicle:
+    display: Own Vehicle
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: ["own bike", "own car", "bike required", "must have vehicle"]
+  travel_required:
+    display: Travel Required
+    category: work_arrangement
+    requirement_type: attribute
+    aliases: ["willing to travel", "frequent travel"]
+

@@ -55,6 +55,17 @@ create table if not exists postings (
 -- created above, these are then no-ops).
 alter table postings add column if not exists category text;
 alter table postings add column if not exists currency text;
+
+-- Taxonomy v2 structured extraction (see output/taxonomy_v2_spec.md
+-- sections 2-3 and structured_extraction.py) -- credential/experience
+-- facts, deliberately scalar columns here rather than skill_mentions
+-- rows, since they're per-posting facts, not repeatable skill matches.
+alter table postings add column if not exists degree_level text;
+alter table postings add column if not exists degree_field text;
+alter table postings add column if not exists has_certification boolean;
+alter table postings add column if not exists experience_min_years integer;
+alter table postings add column if not exists experience_max_years integer;
+alter table postings add column if not exists experience_level text;
 """
 
 # The forecasts table's real schema/trigger/RLS lives in the dedicated
@@ -74,6 +85,13 @@ create table if not exists skill_mentions (
     extracted_at timestamptz default now(),
     unique(posting_id, skill, extraction_method)
 );
+
+-- Idempotent: safe to re-run. Taxonomy v2 adds requirement_type
+-- (skill | credential | experience | language | attribute) alongside
+-- category on every mention -- default 'skill' is correct as-is for
+-- every pre-v2 row, since every extraction_method='taxonomy_v1' mention
+-- really was a plain skill match (v1 had no other requirement type).
+alter table skill_mentions add column if not exists requirement_type text not null default 'skill';
 """
 
 # PostgREST's built-in .upsert() replaces every column it's given on conflict --
@@ -204,12 +222,57 @@ end;
 $$;
 """
 
+# Batched write path for structured_extraction.py's output -- degree_level/
+# degree_field/has_certification/experience_min_years/experience_max_years/
+# experience_level, matched to postings by id. Mirrors enrich_postings_batch's
+# shape (batched jsonb_to_recordset UPDATE, one RPC call per batch) but sets
+# every field unconditionally rather than coalescing -- a re-run of
+# extract.py --all is a full recomputation, so a field that no longer
+# matches should be cleared, not left stale from a prior run.
+UPDATE_POSTINGS_STRUCTURED_FUNCTION_SQL = """\
+create or replace function update_postings_structured_batch(payload jsonb)
+returns table(id uuid)
+language plpgsql
+as $$
+#variable_conflict use_column
+begin
+    return query
+    with incoming as (
+        select *
+        from jsonb_to_recordset(payload) as x(
+            id uuid,
+            degree_level text,
+            degree_field text,
+            has_certification boolean,
+            experience_min_years integer,
+            experience_max_years integer,
+            experience_level text
+        )
+    ),
+    upd as (
+        update postings p
+        set degree_level = incoming.degree_level,
+            degree_field = incoming.degree_field,
+            has_certification = incoming.has_certification,
+            experience_min_years = incoming.experience_min_years,
+            experience_max_years = incoming.experience_max_years,
+            experience_level = incoming.experience_level
+        from incoming
+        where p.id = incoming.id
+        returning p.id
+    )
+    select upd.id from upd;
+end;
+$$;
+"""
+
 ALL_SQL = "\n".join([
     POSTINGS_TABLE_SQL,
     SKILL_MENTIONS_TABLE_SQL,
     DROP_OLD_UPSERT_FUNCTION_SQL,
     UPSERT_FUNCTION_SQL,
     ENRICH_FUNCTION_SQL,
+    UPDATE_POSTINGS_STRUCTURED_FUNCTION_SQL,
 ])
 
 
@@ -441,12 +504,16 @@ def get_postings_needing_enrichment(word_threshold: int = 120) -> list[dict]:
 def get_postings_for_extraction(run_id: str | None = None) -> list[dict]:
     """Postings to run skill extraction over: either every posting in
     Supabase (run_id=None, the --all backfill path) or just the ones from
-    one scrape run (run_id='...', the normal per-collection path)."""
+    one scrape run (run_id='...', the normal per-collection path).
+    experience_raw is included alongside description/skills_raw --
+    structured_extraction.py (taxonomy v2's credential/experience pass)
+    needs it, and pulling it here keeps skill + structured extraction on
+    one shared read instead of two."""
     client = _get_client()
     rows = []
     offset = 0
     while True:
-        query = client.table("postings").select("id,title,description,skills_raw")
+        query = client.table("postings").select("id,title,description,skills_raw,experience_raw")
         if run_id is not None:
             query = query.eq("scrape_run_id", run_id)
         res = query.range(offset, offset + _QUERY_PAGE_SIZE - 1).execute()
@@ -464,7 +531,9 @@ def store_skill_mentions(mentions: list[dict], extraction_method: str) -> dict:
     already-processed postings is always safe and cheap; it just no-ops on
     rows already recorded for that method.
 
-    Each mention dict needs: posting_id, skill, category.
+    Each mention dict needs: posting_id, skill, category. requirement_type
+    is optional and defaults to 'skill' (matching the column's own default)
+    for callers that predate taxonomy v2.
     Returns {"inserted": int, "skipped": int, "failed": int}.
     """
     records = []
@@ -479,6 +548,7 @@ def store_skill_mentions(mentions: list[dict], extraction_method: str) -> dict:
             "skill": skill,
             "category": category,
             "extraction_method": extraction_method,
+            "requirement_type": m.get("requirement_type") or "skill",
         })
 
     failed = len(mentions) - len(records)
@@ -511,6 +581,37 @@ def store_skill_mentions(mentions: list[dict], extraction_method: str) -> dict:
         f"(extraction_method={extraction_method})"
     )
     return {"inserted": inserted, "skipped": skipped, "failed": failed}
+
+
+def update_postings_structured(rows: list[dict]) -> dict:
+    """Batch-write structured_extraction.py's output -- degree_level,
+    degree_field, has_certification, experience_min_years,
+    experience_max_years, experience_level -- via
+    update_postings_structured_batch. Each row needs 'id' plus all six
+    fields (None for anything not found); the RPC sets every field
+    unconditionally, so a re-run correctly clears a stale value rather
+    than leaving one from a prior extraction pass.
+
+    Returns {"updated": int, "failed": int}.
+    """
+    if not rows:
+        return {"updated": 0, "failed": 0}
+
+    client = _get_client()
+    updated = 0
+    failed = 0
+
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = rows[i : i + _BATCH_SIZE]
+        try:
+            result = client.rpc("update_postings_structured_batch", {"payload": batch}).execute()
+            updated += len(result.data or [])
+        except Exception as exc:
+            logger.error(f"Batch structured-fields update failed ({len(batch)} rows): {exc}")
+            failed += len(batch)
+
+    logger.info(f"update_postings_structured: updated={updated} failed={failed}")
+    return {"updated": updated, "failed": failed}
 
 
 # --------------------------------------------------------------------------
@@ -576,6 +677,55 @@ def get_skill_mentions_for_forecast() -> list[dict]:
         res = (
             client.table("skill_mentions")
             .select("posting_id,skill")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def get_postings_for_depth_comparison() -> list[dict]:
+    """id, source, title, degree_level, has_certification, experience_level
+    for every posting -- what compare_taxonomy_depth.py needs: domain
+    inference from title, source grouping, and the taxonomy-v2 structured
+    credential/experience signal (which never appears in skill_mentions,
+    since those two are deliberately not taxonomy entries -- see
+    structured_extraction.py)."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("postings")
+            .select("id,source,title,degree_level,has_certification,experience_level")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def get_skill_mentions_for_analysis() -> list[dict]:
+    """posting_id, skill, category, requirement_type, extraction_method
+    for every skill_mentions row -- what compare_taxonomy_depth.py needs
+    to distinguish the preserved taxonomy_v1 pass from the new taxonomy_v2
+    pass (see taxonomy v2 spec section 1: "v1 extractions stay
+    auditable")."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("skill_mentions")
+            .select("posting_id,skill,category,requirement_type,extraction_method")
             .range(offset, offset + _QUERY_PAGE_SIZE - 1)
             .execute()
         )
