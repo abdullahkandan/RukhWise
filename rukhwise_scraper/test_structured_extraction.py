@@ -61,6 +61,87 @@ class DegreeLevelGuardTests(unittest.TestCase):
         self.assertEqual(extract_degree_level(text), "bachelors")
 
 
+class DegreeLevelGraduateGuardTests(unittest.TestCase):
+    """Live-observed after the first extract.py --all run: 27 of 128
+    bachelors labels rested SOLELY on the bare 'graduate' alias, and one
+    sampled case was an institution describing its own programs, not a
+    job requirement."""
+
+    def test_fresh_graduate_does_not_set_degree_level(self):
+        # Live-observed: 8f6b093d-faec-4515-bc97-17ab56971042
+        text = "...insights and suggest improvements. Fresh Graduate"
+        self.assertIsNone(extract_degree_level(text))
+
+    def test_recent_graduate_does_not_set_degree_level(self):
+        text = "Recent graduate with strong analytical skills encouraged to apply."
+        self.assertIsNone(extract_degree_level(text))
+
+    def test_institution_describing_own_programs_rejected(self):
+        # Live-observed: 7b67b04b-3c4c-46b6-95d8-aebe12008451
+        text = "...offers a range of undergraduate and graduate programs designed to equip learners."
+        self.assertIsNone(extract_degree_level(text))
+
+    def test_graduate_of_university_rejected(self):
+        text = "Should be a graduate of a reputable university with strong references."
+        self.assertIsNone(extract_degree_level(text))
+
+    def test_graduate_alumni_context_rejected(self):
+        text = "Our graduate alumni network spans over 50 countries worldwide."
+        self.assertIsNone(extract_degree_level(text))
+
+    def test_bare_graduate_with_degree_word_matches(self):
+        text = "Candidate must be a graduate with a relevant degree in the field."
+        self.assertEqual(extract_degree_level(text), "bachelors")
+
+    def test_graduate_in_named_field_matches(self):
+        text = "Candidate must be a graduate in Computer Science or a related discipline."
+        self.assertEqual(extract_degree_level(text), "bachelors")
+
+    def test_graduate_degree_matches(self):
+        text = "Graduate degree preferred but not mandatory."
+        self.assertEqual(extract_degree_level(text), "bachelors")
+
+
+class DegreeLevelIntermediateGuardTests(unittest.TestCase):
+    """Live-observed: 3 of 6 'intermediate' labels were skill-proficiency
+    language, not the Pakistani Intermediate (11th/12th grade) qualification."""
+
+    def test_intermediate_math_concepts_rejected(self):
+        # Live-observed: 99218ca2-64c6-45d7-8996-c31ae8601117
+        text = "Strong command of basic and intermediate math concepts required."
+        self.assertIsNone(extract_degree_level(text))
+
+    def test_intermediate_proficiency_in_excel_rejected(self):
+        text = "Intermediate proficiency in Microsoft Excel (Pivot Tables) required."
+        self.assertIsNone(extract_degree_level(text))
+
+    def test_basic_to_intermediate_sql_rejected(self):
+        text = "Basic to intermediate SQL (must-have) for this analyst role."
+        self.assertIsNone(extract_degree_level(text))
+
+    def test_intermediate_english_rejected(self):
+        text = "Candidate should have intermediate English communication skills."
+        self.assertIsNone(extract_degree_level(text))
+
+    def test_intermediate_with_qualification_context_matches(self):
+        text = "Qualification: Intermediate/ Bachelor's would both be considered for this role."
+        # "intermediate" is the LOWER level per DEGREE_LEVELS order, so it
+        # correctly wins over "bachelor's" appearing in the same sentence.
+        self.assertEqual(extract_degree_level(text), "intermediate")
+
+    def test_intermediate_with_matric_context_matches(self):
+        text = "Minimum qualification: Matric or Intermediate, whichever the candidate holds."
+        self.assertEqual(extract_degree_level(text), "intermediate")
+
+    def test_intermediate_inside_requirements_section_matches(self):
+        text = "**Qualifications:**\n* Intermediate\n* Strong communication skills"
+        self.assertEqual(extract_degree_level(text), "intermediate")
+
+    def test_bare_intermediate_outside_requirements_section_rejected(self):
+        text = "The intermediate stage of the project involves data cleaning and validation."
+        self.assertIsNone(extract_degree_level(text))
+
+
 class DegreeLevelSafeAliasTests(unittest.TestCase):
     def test_bachelor_s_degree_matches(self):
         text = "Bachelor's degree in Business Administration required."
@@ -125,33 +206,104 @@ class CertificationTests(unittest.TestCase):
 
 
 class ExperienceYearsTests(unittest.TestCase):
+    """Description-sourced matches all have "experience" adjacent, so they
+    pass the requirements-context guard; passed as (description, None)."""
+
     def test_exact_years(self):
-        self.assertEqual(extract_experience_years("3 years of experience required."), (3, 3))
+        self.assertEqual(extract_experience_years("3 years of experience required.", None), (3, 3))
 
     def test_dash_range_years(self):
-        self.assertEqual(extract_experience_years("2-3 years of experience."), (2, 3))
+        self.assertEqual(extract_experience_years("2-3 years of experience.", None), (2, 3))
 
     def test_to_range_years(self):
-        self.assertEqual(extract_experience_years("2 to 3 years of relevant experience."), (2, 3))
+        self.assertEqual(extract_experience_years("2 to 3 years of relevant experience.", None), (2, 3))
 
     def test_minimum_years(self):
-        self.assertEqual(extract_experience_years("Minimum 5 years of experience."), (5, None))
+        self.assertEqual(extract_experience_years("Minimum 5 years of experience.", None), (5, None))
 
     def test_min_dot_years(self):
-        self.assertEqual(extract_experience_years("Min. 4 years experience required."), (4, None))
+        self.assertEqual(extract_experience_years("Min. 4 years experience required.", None), (4, None))
 
     def test_at_least_years(self):
-        self.assertEqual(extract_experience_years("At least 4 years of experience required."), (4, None))
+        self.assertEqual(extract_experience_years("At least 4 years of experience required.", None), (4, None))
 
     def test_plus_years(self):
-        self.assertEqual(extract_experience_years("3+ years of experience."), (3, None))
+        self.assertEqual(extract_experience_years("3+ years of experience.", None), (3, None))
 
     def test_no_years_mentioned(self):
-        self.assertEqual(extract_experience_years("Strong communication skills required."), (None, None))
+        self.assertEqual(extract_experience_years("Strong communication skills required.", None), (None, None))
 
     def test_range_priority_over_bare_pattern(self):
         # Would wrongly extract (3, 3) if the bare "N years" pattern won.
-        self.assertEqual(extract_experience_years("3-5 years of experience needed."), (3, 5))
+        self.assertEqual(extract_experience_years("3-5 years of experience needed.", None), (3, 5))
+
+
+class ExperienceYearsSubjectAttributionTests(unittest.TestCase):
+    """The mandatory guard test for numeric years: same failure class as
+    the bare-"senior" guard. Live-observed after the first extract.py
+    --all run: 8 of 10 postings with experience_min_years > 15 were the
+    COMPANY's years in business, a candidate AGE threshold, or years of
+    EDUCATION (the Pakistani HEC "18 Years of Education" convention for a
+    PhD) -- none of which are the candidate's required work experience."""
+
+    def test_experience_raw_trusted_unconditionally(self):
+        # A bare, structured experience_raw value is never guarded --
+        # it's a site-provided "years required" field, not free text.
+        self.assertEqual(extract_experience_years(None, "3 Years"), (3, 3))
+
+    def test_experience_raw_trusted_even_when_unusually_high(self):
+        self.assertEqual(extract_experience_years(None, "21 Years"), (21, 21))
+
+    def test_company_years_in_business_rejected(self):
+        text = (
+            "Zones, a Minority Business Enterprise (MBE) in business for over 35 years, "
+            "specializes in Digital Workplace, Cloud & Data Center, Networking, Security."
+        )
+        self.assertEqual(extract_experience_years(text, None), (None, None))
+
+    def test_company_heritage_years_rejected(self):
+        text = "With our strong heritage of nearly 60 years, we are a responsible and diverse group."
+        self.assertEqual(extract_experience_years(text, None), (None, None))
+
+    def test_candidate_age_threshold_rejected(self):
+        text = "Candidate should be 18 years or older (you will be required to show your CNIC)."
+        self.assertEqual(extract_experience_years(text, None), (None, None))
+
+    def test_candidate_age_range_rejected(self):
+        text = "Presentable personality with a professional attitude. Age: 26-50 years. Please note."
+        self.assertEqual(extract_experience_years(text, None), (None, None))
+
+    def test_years_of_education_rejected(self):
+        text = "Qualification: Ph D / M Phil (18 Years of Education) in the relevant discipline required."
+        self.assertEqual(extract_experience_years(text, None), (None, None))
+
+    def test_genuine_description_match_still_accepted(self):
+        text = "Requirements: 10+ years of experience in database architecture and design."
+        self.assertEqual(extract_experience_years(text, None), (10, None))
+
+    def test_requirements_section_heading_accepted_without_adjacent_word(self):
+        # No "experience"/"required"/"minimum" word directly adjacent to
+        # the number -- only the section heading justifies the match.
+        text = "**Requirements:** 3-5 years in a related field, strong communication skills."
+        self.assertEqual(extract_experience_years(text, None), (3, 5))
+
+    def test_description_match_rejected_outside_requirements_section(self):
+        text = "About the company: founded 12 years ago, we have grown steadily every year."
+        self.assertEqual(extract_experience_years(text, None), (None, None))
+
+    def test_description_match_after_other_section_heading_rejected(self):
+        # A requirements heading appears, but the number is under a LATER,
+        # unrelated heading -- no longer "inside" the requirements section.
+        text = "Requirements: strong communication skills. Benefits: paid leave after 5 years of service."
+        self.assertEqual(extract_experience_years(text, None), (None, None))
+
+    def test_clean_experience_raw_not_shadowed_by_description_company_age(self):
+        # Regression: the old implementation concatenated description +
+        # experience_raw and took the FIRST match in that combined string,
+        # so a company-age mention earlier in the description could shadow
+        # a clean experience_raw value entirely.
+        description = "Zones has been in business for over 35 years, serving clients worldwide."
+        self.assertEqual(extract_experience_years(description, "3 Years"), (3, 3))
 
 
 class ExperienceLevelTests(unittest.TestCase):
