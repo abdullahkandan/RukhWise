@@ -77,6 +77,21 @@ alter table postings add column if not exists experience_level text;
 alter table postings add column if not exists domain text;
 alter table postings add column if not exists domain_method text;
 alter table postings add column if not exists domain_confidence numeric;
+
+-- Job-family title normalization against a controlled vocabulary (see
+-- job_family_classifier.py / job_families.yaml). family_method records
+-- which stage assigned the value -- rule | llm | unmatched -- rule
+-- covers both the domain-scoped and unscoped title-keyword passes
+-- (both are stage 1; the distinction isn't stored separately, unlike
+-- domain_method's rule_title/rule_description split, since job-family
+-- rule matching is a single conceptual stage with two search scopes).
+-- job_family is NULL when family_method='unmatched' -- there is no
+-- catch-all family value the way domain has 'other', since this
+-- vocabulary is a curated approved list, not a taxonomy with a residual
+-- bucket.
+alter table postings add column if not exists job_family text;
+alter table postings add column if not exists family_method text;
+alter table postings add column if not exists family_confidence numeric;
 """
 
 # The forecasts table's real schema/trigger/RLS lives in the dedicated
@@ -314,6 +329,41 @@ end;
 $$;
 """
 
+# Batched write path for job_family_classifier.py's output -- job_family,
+# family_method, family_confidence. Same unconditional-SET convention as
+# update_postings_domain_batch: a re-run (e.g. after job_families.yaml
+# grows) is a full recomputation.
+UPDATE_POSTINGS_FAMILY_FUNCTION_SQL = """\
+create or replace function update_postings_family_batch(payload jsonb)
+returns table(id uuid)
+language plpgsql
+as $$
+#variable_conflict use_column
+begin
+    return query
+    with incoming as (
+        select *
+        from jsonb_to_recordset(payload) as x(
+            id uuid,
+            job_family text,
+            family_method text,
+            family_confidence numeric
+        )
+    ),
+    upd as (
+        update postings p
+        set job_family = incoming.job_family,
+            family_method = incoming.family_method,
+            family_confidence = incoming.family_confidence
+        from incoming
+        where p.id = incoming.id
+        returning p.id
+    )
+    select upd.id from upd;
+end;
+$$;
+"""
+
 ALL_SQL = "\n".join([
     POSTINGS_TABLE_SQL,
     SKILL_MENTIONS_TABLE_SQL,
@@ -322,6 +372,7 @@ ALL_SQL = "\n".join([
     ENRICH_FUNCTION_SQL,
     UPDATE_POSTINGS_STRUCTURED_FUNCTION_SQL,
     UPDATE_POSTINGS_DOMAIN_FUNCTION_SQL,
+    UPDATE_POSTINGS_FAMILY_FUNCTION_SQL,
 ])
 
 
@@ -713,6 +764,59 @@ def update_postings_domain(rows: list[dict]) -> dict:
             failed += len(batch)
 
     logger.info(f"update_postings_domain: updated={updated} failed={failed}")
+    return {"updated": updated, "failed": failed}
+
+
+def get_postings_for_family_classification() -> list[dict]:
+    """id, title, domain for every posting -- what
+    job_family_classifier.py needs: title for both stages, domain for
+    stage 1's domain-scoped search. Read-only; the only write path is
+    update_postings_family() below."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("postings")
+            .select("id,title,domain")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def update_postings_family(rows: list[dict]) -> dict:
+    """Batch-write job_family_classifier.py's output -- job_family,
+    family_method, family_confidence -- via update_postings_family_batch.
+    Each row needs 'id' plus all three fields; the RPC sets every field
+    unconditionally, so a re-run (e.g. after job_families.yaml grows)
+    correctly overwrites a prior classification rather than leaving it
+    stale.
+
+    Returns {"updated": int, "failed": int}.
+    """
+    if not rows:
+        return {"updated": 0, "failed": 0}
+
+    client = _get_client()
+    updated = 0
+    failed = 0
+
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = rows[i : i + _BATCH_SIZE]
+        try:
+            result = client.rpc("update_postings_family_batch", {"payload": batch}).execute()
+            updated += len(result.data or [])
+        except Exception as exc:
+            logger.error(f"Batch family update failed ({len(batch)} rows): {exc}")
+            failed += len(batch)
+
+    logger.info(f"update_postings_family: updated={updated} failed={failed}")
     return {"updated": updated, "failed": failed}
 
 

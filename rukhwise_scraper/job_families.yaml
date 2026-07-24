@@ -1,0 +1,393 @@
+# Rukhwise job-family taxonomy -- controlled vocabulary for title
+# normalization (see job_family_classifier.py). This is a FIXED starter
+# list approved by hand, not emergent from clustering: extend it
+# deliberately, by editing this file after reviewing a gap report, never
+# by letting the classifier invent new families.
+#
+# Each family's `keywords` are TITLE phrases only (unlike domains.yaml,
+# which also carries broader description-topic words) -- job titles are
+# short and conventional, so a compact set of exact phrasings is the
+# right shape here. Matched as whole words/phrases, case-insensitive,
+# same convention as taxonomy_v3.yaml's aliases. Seniority prefixes
+# (senior, junior, lead, assistant, head of, chief) are stripped from the
+# START of a title before matching -- see job_family_classifier.py's
+# _strip_seniority_prefix() -- so "Assistant Accountant" matches
+# `accountant` while "Executive Assistant" (where "assistant" is the role
+# itself, not a leading modifier) is untouched, since the strip only ever
+# removes a LEADING token.
+#
+# `domain` scopes a family to one of domains.yaml's keys, letting stage 1
+# search that domain's families first (a posting's domain narrows the
+# candidate family list enormously) before falling back to an unscoped
+# search across every family. `domain: cross_domain` marks a family that
+# legitimately appears across many domains (e.g. "Intern") and is always
+# included in the domain-scoped search regardless of which domain a
+# posting was assigned, on top of being found by the unscoped fallback.
+
+families:
+  # ---------- technology_it ----------
+  - key: software_engineer
+    display: Software Engineer
+    domain: technology_it
+    keywords: [software engineer, software developer, application developer, swe, systems engineer]
+  - key: web_developer
+    display: Web Developer
+    domain: technology_it
+    keywords: [web developer, front end developer, frontend developer, back end developer, backend developer, full stack developer, fullstack developer, wordpress developer]
+  - key: mobile_developer
+    display: Mobile Developer
+    domain: technology_it
+    keywords: [mobile developer, android developer, ios developer, app developer, flutter developer, react native developer]
+  - key: data_analyst
+    display: Data Analyst
+    domain: technology_it
+    keywords: [data analyst, business intelligence analyst, bi analyst]
+  - key: data_scientist
+    display: Data Scientist
+    domain: technology_it
+    keywords: [data scientist, machine learning engineer, ml engineer, ai engineer]
+  - key: data_engineer
+    display: Data Engineer
+    domain: technology_it
+    keywords: [data engineer, etl developer, big data engineer]
+  - key: devops_engineer
+    display: DevOps Engineer
+    domain: technology_it
+    keywords: [devops engineer, site reliability engineer, sre, cloud engineer, infrastructure engineer]
+  - key: qa_engineer
+    display: QA Engineer
+    domain: technology_it
+    keywords: [qa engineer, quality assurance engineer, test engineer, software tester, sdet, automation engineer]
+  - key: ui_ux_designer
+    display: UI/UX Designer
+    domain: technology_it
+    keywords: ["ui/ux designer", ux designer, ui designer, product designer]
+  - key: it_support
+    display: IT Support
+    domain: technology_it
+    keywords: [it support, it officer, it help desk, desktop support, it technician]
+  - key: network_administrator
+    display: Network Administrator
+    domain: technology_it
+    keywords: [network administrator, network engineer, network support engineer]
+  - key: database_administrator
+    display: Database Administrator
+    domain: technology_it
+    keywords: [database administrator, dba]
+  - key: cybersecurity_analyst
+    display: Cybersecurity Analyst
+    domain: technology_it
+    keywords: [cybersecurity analyst, cyber security analyst, information security analyst, soc analyst]
+
+  # ---------- engineering ----------
+  - key: mechanical_engineer
+    display: Mechanical Engineer
+    domain: engineering
+    keywords: [mechanical engineer, mechanical design engineer]
+  - key: electrical_engineer
+    display: Electrical Engineer
+    domain: engineering
+    keywords: [electrical engineer, electrical design engineer]
+  - key: civil_engineer
+    display: Civil Engineer
+    domain: engineering
+    keywords: [civil engineer, structural engineer]
+  - key: chemical_engineer
+    display: Chemical Engineer
+    domain: engineering
+    keywords: [chemical engineer]
+  - key: industrial_engineer
+    display: Industrial Engineer
+    domain: engineering
+    keywords: [industrial engineer, manufacturing engineer, production engineer]
+  - key: project_engineer
+    display: Project Engineer
+    domain: engineering
+    keywords: [project engineer]
+
+  # ---------- sales_marketing ----------
+  - key: sales_executive
+    display: Sales Executive
+    domain: sales_marketing
+    keywords: [sales executive, sales officer, sales representative]
+  - key: sales_manager
+    display: Sales Manager
+    domain: sales_marketing
+    keywords: [sales manager, regional sales manager, area sales manager, national sales manager]
+  - key: business_development
+    display: Business Development
+    domain: sales_marketing
+    keywords: [business development executive, business development manager, business development officer, "bdm", "bde"]
+  - key: digital_marketing_specialist
+    display: Digital Marketing Specialist
+    domain: sales_marketing
+    keywords: [digital marketing specialist, digital marketing executive, digital marketing officer]
+  - key: marketing_manager
+    display: Marketing Manager
+    domain: sales_marketing
+    keywords: [marketing manager, brand manager, product marketing manager]
+  - key: social_media_manager
+    display: Social Media Manager
+    domain: sales_marketing
+    keywords: [social media manager, social media executive, social media specialist]
+  - key: content_writer
+    display: Content Writer
+    domain: sales_marketing
+    keywords: [content writer, copywriter, content creator]
+  - key: graphic_designer
+    display: Graphic Designer
+    domain: sales_marketing
+    keywords: [graphic designer, visual designer]
+  - key: seo_specialist
+    display: SEO Specialist
+    domain: sales_marketing
+    keywords: [seo specialist, seo executive, seo analyst]
+
+  # ---------- accounting_finance ----------
+  - key: accountant
+    display: Accountant
+    domain: accounting_finance
+    keywords: [accountant, accounts officer, accounts executive]
+  - key: financial_analyst
+    display: Financial Analyst
+    domain: accounting_finance
+    keywords: [financial analyst, finance analyst]
+  - key: auditor
+    display: Auditor
+    domain: accounting_finance
+    keywords: [auditor, internal auditor, external auditor]
+  - key: finance_manager
+    display: Finance Manager
+    domain: accounting_finance
+    keywords: [finance manager, financial controller]
+
+  # ---------- admin_clerical ----------
+  - key: administrative_assistant
+    display: Administrative Assistant
+    domain: admin_clerical
+    keywords: [administrative assistant, admin assistant, admin officer]
+  - key: executive_assistant
+    display: Executive Assistant
+    domain: admin_clerical
+    keywords: [executive assistant, personal assistant, "pa to ceo", "pa to director"]
+  - key: receptionist
+    display: Receptionist
+    domain: admin_clerical
+    keywords: [receptionist, front desk officer, front desk executive]
+  - key: office_manager
+    display: Office Manager
+    domain: admin_clerical
+    keywords: [office manager, office coordinator, office administrator]
+  - key: data_entry_operator
+    display: Data Entry Operator
+    domain: admin_clerical
+    keywords: [data entry operator, data entry clerk]
+
+  # ---------- hr ----------
+  - key: hr_officer
+    display: HR Officer
+    domain: hr
+    keywords: [hr officer, hr executive, hr generalist, hr assistant]
+  - key: recruiter
+    display: Recruiter
+    domain: hr
+    keywords: [recruiter, talent acquisition specialist, recruitment officer, recruitment specialist]
+  - key: hr_manager
+    display: HR Manager
+    domain: hr
+    keywords: [hr manager, hr business partner, human resource manager]
+
+  # ---------- customer_support_bpo ----------
+  - key: customer_service_representative
+    display: Customer Service Representative
+    domain: customer_support_bpo
+    keywords: [customer service representative, customer service officer, "csr", customer care representative]
+  - key: call_center_agent
+    display: Call Center Agent
+    domain: customer_support_bpo
+    keywords: [call center agent, call centre agent, telemarketer, telesales agent]
+  - key: technical_support
+    display: Technical Support
+    domain: customer_support_bpo
+    keywords: [technical support representative, technical support agent, technical support engineer]
+
+  # ---------- healthcare ----------
+  - key: doctor
+    display: Doctor
+    domain: healthcare
+    keywords: [doctor, physician, general practitioner, consultant physician, surgeon]
+  - key: nurse
+    display: Nurse
+    domain: healthcare
+    keywords: [nurse, staff nurse, registered nurse]
+  - key: pharmacist
+    display: Pharmacist
+    domain: healthcare
+    keywords: [pharmacist, pharmacy officer]
+  - key: lab_technician
+    display: Lab Technician
+    domain: healthcare
+    keywords: [lab technician, laboratory technician, medical lab technologist]
+  - key: medical_officer
+    display: Medical Officer
+    domain: healthcare
+    keywords: [medical officer, house officer, house job]
+
+  # ---------- education ----------
+  - key: teacher
+    display: Teacher
+    domain: education
+    keywords: [teacher, school teacher, subject teacher, primary teacher]
+  - key: lecturer
+    display: Lecturer
+    domain: education
+    keywords: [lecturer, assistant professor, associate professor, professor, faculty member]
+  - key: academic_coordinator
+    display: Academic Coordinator
+    domain: education
+    keywords: [academic coordinator, academic officer, program coordinator]
+  - key: tutor
+    display: Tutor
+    domain: education
+    keywords: [tutor, home tutor, private tutor]
+
+  # ---------- logistics_supply_chain ----------
+  - key: supply_chain_officer
+    display: Supply Chain Officer
+    domain: logistics_supply_chain
+    keywords: [supply chain officer, supply chain executive, supply chain analyst]
+  - key: warehouse_manager
+    display: Warehouse Manager
+    domain: logistics_supply_chain
+    keywords: [warehouse manager, warehouse supervisor, warehouse in-charge, warehouse incharge]
+  - key: procurement_officer
+    display: Procurement Officer
+    domain: logistics_supply_chain
+    keywords: [procurement officer, procurement executive, purchase officer, purchasing officer]
+  - key: driver
+    display: Driver
+    domain: logistics_supply_chain
+    keywords: [driver, delivery driver]
+  - key: delivery_rider
+    display: Delivery Rider
+    domain: logistics_supply_chain
+    keywords: [delivery rider, dispatch rider, bike rider]
+
+  # ---------- trades_technical ----------
+  - key: electrician
+    display: Electrician
+    domain: trades_technical
+    keywords: [electrician]
+  - key: technician
+    display: Technician
+    domain: trades_technical
+    keywords: [technician, service technician, field technician, maintenance technician]
+  - key: welder
+    display: Welder
+    domain: trades_technical
+    keywords: [welder, welding technician]
+  - key: mechanic
+    display: Mechanic
+    domain: trades_technical
+    keywords: [mechanic, auto mechanic]
+  - key: plumber
+    display: Plumber
+    domain: trades_technical
+    keywords: [plumber]
+  - key: machine_operator
+    display: Machine Operator
+    domain: trades_technical
+    keywords: [machine operator, cnc operator, production operator]
+
+  # ---------- food_service ----------
+  - key: chef
+    display: Chef
+    domain: food_service
+    keywords: [chef, head chef, sous chef]
+  - key: cook
+    display: Cook
+    domain: food_service
+    keywords: [cook, line cook]
+  - key: waiter
+    display: Waiter
+    domain: food_service
+    keywords: [waiter, waitress, steward]
+  - key: kitchen_staff
+    display: Kitchen Staff
+    domain: food_service
+    keywords: [kitchen staff, kitchen helper]
+  - key: restaurant_manager
+    display: Restaurant Manager
+    domain: food_service
+    keywords: [restaurant manager, catering manager]
+
+  # ---------- retail ----------
+  - key: sales_associate
+    display: Sales Associate
+    domain: retail
+    keywords: [sales associate, retail sales associate, sales staff]
+  - key: store_manager
+    display: Store Manager
+    domain: retail
+    keywords: [store manager, shop manager, showroom manager]
+  - key: cashier
+    display: Cashier
+    domain: retail
+    keywords: [cashier, till operator]
+
+  # ---------- construction_realestate ----------
+  - key: architect
+    display: Architect
+    domain: construction_realestate
+    keywords: [architect, architectural designer]
+  - key: site_supervisor
+    display: Site Supervisor
+    domain: construction_realestate
+    keywords: [site supervisor, site engineer, site foreman]
+  - key: quantity_surveyor
+    display: Quantity Surveyor
+    domain: construction_realestate
+    keywords: [quantity surveyor, "qs"]
+  - key: real_estate_agent
+    display: Real Estate Agent
+    domain: construction_realestate
+    keywords: [real estate agent, property consultant, realtor]
+
+  # ---------- media_creative ----------
+  - key: video_editor
+    display: Video Editor
+    domain: media_creative
+    keywords: [video editor, video editing specialist]
+  - key: photographer
+    display: Photographer
+    domain: media_creative
+    keywords: [photographer, photojournalist]
+  - key: journalist
+    display: Journalist
+    domain: media_creative
+    keywords: [journalist, reporter, news writer]
+
+  # ---------- cross_domain ----------
+  # Always searched alongside a posting's own domain-scoped families (not
+  # just the unscoped fallback) -- these titles legitimately span every
+  # domain in this market.
+  - key: intern
+    display: Intern
+    domain: cross_domain
+    keywords: [intern, internship]
+  - key: management_trainee
+    display: Management Trainee
+    domain: cross_domain
+    keywords: [management trainee, "mgt trainee"]
+  - key: general_manager
+    display: General Manager
+    domain: cross_domain
+    keywords: [general manager, "gm"]
+  - key: operations_manager
+    display: Operations Manager
+    domain: cross_domain
+    keywords: [operations manager, "ops manager"]
+  - key: security_guard
+    display: Security Guard
+    domain: cross_domain
+    keywords: [security guard, watchman, chowkidar]
