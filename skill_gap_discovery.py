@@ -20,21 +20,26 @@ taxonomy file; nothing here is ever applied automatically.
       This is deliberately NOT the n-gram-mining approach drift.py uses
       for its candidate lists -- n-gram mining on trades/healthcare/
       construction text produced unusable bare nouns (see the prior
-      drift round). Reading the actual sentence lets the model return
-      "fire safety inspection" instead of "safety". Raw responses are
-      logged verbatim, per domain, to
+      drift round). Raw responses are logged verbatim, per domain, to
       output/skill_extraction_{domain}_{date}.json (gitignored).
 
       TASK 3: aggregates proposed phrases per domain -- normalizes case/
-      whitespace only (no fuzzy/synonym merging, to avoid false merges),
-      keeps phrases seen across >=3 distinct companies (the same anti-
-      bulk-poster bar drift.py/forecast.py apply elsewhere), ranks by
-      distinct companies then distinct postings, and attaches up to 2
-      REAL context snippets found by searching the contributing postings'
-      own description text for the phrase verbatim -- never fabricated;
-      a candidate whose phrase can't be found verbatim in any
-      contributing posting is shown with a note instead of an invented
-      snippet.
+      whitespace only (no fuzzy/synonym merging, to avoid false merges).
+      A (phrase, posting) pair only counts at all if the phrase is found
+      as an exact case-insensitive substring in THAT posting's own
+      description text -- a phrase the model proposed but that never
+      appears verbatim in the source is dropped outright, never shown
+      with a fabricated snippet (this caught a real contamination bug in
+      the first run: the model echoing the extraction prompt's own
+      illustrative example regardless of actual posting content -- see
+      output/taxonomy_v3_skills_2026-07-24_run1_backup.md). A surviving
+      candidate additionally needs >=2 distinct verbatim-confirmed
+      postings, and a distinct-company count scaled by domain size
+      (DOMAIN_SIZE_THRESHOLD/LARGE_DOMAIN_MIN_COMPANIES/
+      SMALL_DOMAIN_MIN_COMPANIES below) -- a flat >=3-company bar was
+      found to suppress exactly the small domains this tool exists to
+      serve. Ranks by distinct companies then distinct postings, and
+      attaches up to 2 real verbatim snippets.
 
       TASK 4: runs a second, small Groq pass over the surviving
       candidates (phrase + counts only, no raw text) asking for a
@@ -43,7 +48,16 @@ taxonomy file; nothing here is ever applied automatically.
       question drift.py's own Groq pass answers for taxonomy v2. Writes
       output/taxonomy_v3_skills_{date}.md, grouped by domain, capped at
       the top 40 candidates per domain, and prints a per-domain console
-      summary (targets, survivors, proposed new categories).
+      summary (targets, survivors, proposed new categories, and how many
+      distinct proposed phrases were dropped outright for having zero
+      verbatim match anywhere -- the size of that number is a direct
+      measure of how much the model was inventing rather than reading).
+
+  python skill_gap_discovery.py --domains trades_technical,healthcare
+      Restricts TASK 2-4 to the named domains (still gated by the
+      >=15-target qualification bar) -- used to re-run a subset without
+      re-spending Groq quota on domains whose results are being kept
+      as-is from a prior run.
 
 Requires GROQ_API_KEY. A batch that fails (network error, rate limit
 exhausted after retries, unparseable response) is logged and simply
@@ -87,10 +101,17 @@ CATEGORY_BATCH_SIZE = 40     # candidates per call for the (much lighter) catego
 DESCRIPTION_MAX_CHARS = 4000  # defensive cap against a pathologically long outlier; typical postings are far shorter
 
 MIN_TARGET_POSTINGS_PER_DOMAIN = 15
-MIN_DISTINCT_COMPANIES = 3
+MIN_VERBATIM_POSTINGS = 2   # a candidate needs >=2 distinct postings where the phrase is verbatim-confirmed
+DOMAIN_SIZE_THRESHOLD = 60
+LARGE_DOMAIN_MIN_COMPANIES = 3  # domains with >=DOMAIN_SIZE_THRESHOLD target postings
+SMALL_DOMAIN_MIN_COMPANIES = 2  # domains below that -- a flat >=3 bar suppressed exactly these
 APPROVAL_SHEET_CAP = 40
 SNIPPET_WINDOW_CHARS = 60
 SNIPPETS_PER_CANDIDATE = 2
+
+
+def _min_companies_for(target_count: int) -> int:
+    return LARGE_DOMAIN_MIN_COMPANIES if target_count >= DOMAIN_SIZE_THRESHOLD else SMALL_DOMAIN_MIN_COMPANIES
 
 # 'other' is the domain classifier's residual bucket (unclassified/
 # ambiguous/malformed postings), not a coherent domain -- extracting
@@ -261,14 +282,16 @@ def _groq_call(prompt: str, api_key: str) -> list | None:
 EXTRACTION_PROMPT_INSTRUCTIONS = (
     "For each job posting below (id, title, full description), extract the concrete skills, "
     "tools, equipment, techniques, and competencies this employer is asking a candidate to have. "
-    "Return a flat list of short noun phrases per posting. Do NOT return generic business verbs "
-    "(e.g. 'manage', 'coordinate'), soft skills (e.g. 'communication', 'teamwork'), employment "
-    "conditions (e.g. 'full time', 'on-site'), degrees/education level, or years of experience -- "
-    "those are captured elsewhere. Do NOT return single generic nouns like 'safety' or 'equipment' "
-    "where a specific phrase exists in the text -- prefer 'fire safety inspection' over 'safety'. "
-    "If a posting genuinely has nothing extractable, return an empty list for it. Respond with a "
-    "JSON array of objects with keys: id, skills (array of strings). Every posting id given below "
-    "must appear exactly once in your response.\n\n"
+    "Return a flat list of short noun phrases per posting, using wording that appears in or "
+    "closely tracks the posting's own text -- never invent a phrase that isn't grounded in what "
+    "this specific posting actually says. Do NOT return generic business verbs (e.g. 'manage', "
+    "'coordinate'), soft skills (e.g. 'communication', 'teamwork'), employment conditions (e.g. "
+    "'full time', 'on-site'), degrees/education level, or years of experience -- those are "
+    "captured elsewhere. Do NOT return single generic nouns (e.g. 'safety', 'equipment') when the "
+    "posting states something more specific -- extract the specific phrase the posting actually "
+    "uses instead. If a posting genuinely has nothing extractable, return an empty list for it. "
+    "Respond with a JSON array of objects with keys: id, skills (array of strings). Every posting "
+    "id given below must appear exactly once in your response.\n\n"
 )
 
 
@@ -370,33 +393,69 @@ class _Candidate:
         self.snippets: list[str] = []
 
 
-def aggregate_domain(domain: str, targets: list[dict], extracted: dict[str, list[str]]) -> list[_Candidate]:
-    """Normalizes/merges, filters to >=MIN_DISTINCT_COMPANIES, attaches
-    real snippets, and returns survivors ranked by distinct companies then
-    distinct postings (descending)."""
+class AggregationResult:
+    __slots__ = ("survivors", "dropped_by_verbatim", "total_proposed", "min_companies_used")
+
+    def __init__(self, survivors: list[_Candidate], dropped_by_verbatim: int, total_proposed: int, min_companies_used: int):
+        self.survivors = survivors
+        self.dropped_by_verbatim = dropped_by_verbatim
+        self.total_proposed = total_proposed
+        self.min_companies_used = min_companies_used
+
+
+def aggregate_domain(domain: str, targets: list[dict], extracted: dict[str, list[str]], min_companies: int) -> AggregationResult:
+    """Normalizes/merges (case+whitespace only), then applies the
+    verbatim requirement: a (phrase, posting) pair only counts if the
+    phrase is found as an exact case-insensitive substring in THAT
+    posting's own description -- a phrase proposed for a posting that
+    never actually contains it is dropped for that posting, not merely
+    flagged. A candidate survives only with >=MIN_VERBATIM_POSTINGS
+    verbatim-confirmed postings AND >=min_companies distinct companies
+    (the scaled bar -- see _min_companies_for). Because candidates are
+    only ever created on a verbatim hit, every surviving candidate's
+    snippets are guaranteed real; there is no "no verbatim match" case
+    left to display.
+
+    Also tracks dropped_by_verbatim: how many DISTINCT proposed phrases
+    (post-normalization) never had even one verbatim match anywhere in
+    their claimed postings -- these never became a candidate at all.
+    That count is a direct measure of how much the model was inventing
+    rather than reading, independent of whether a phrase would have
+    cleared the postings/company bars."""
     postings_by_id = {p["id"]: p for p in targets}
     candidates: dict[str, _Candidate] = {}
+    all_proposed_keys: set[str] = set()
 
     for pid, phrases in extracted.items():
         posting = postings_by_id.get(pid)
         if posting is None:
             continue
         company = posting.get("company") or "(unknown company)"
+        description = posting.get("description") or ""
         for raw_phrase in phrases:
             key = _normalize_phrase(raw_phrase)
             if not key:
                 continue
+            all_proposed_keys.add(key)
+
+            snippet = _find_snippet(description, raw_phrase)
+            if snippet is None:
+                continue  # no verbatim match in THIS posting -- this (phrase, posting) pair does not count
+
             cand = candidates.setdefault(key, _Candidate(display=raw_phrase.strip()))
             cand.postings.add(pid)
             cand.companies.add(company)
-            if len(cand.snippets) < SNIPPETS_PER_CANDIDATE:
-                snippet = _find_snippet(posting.get("description") or "", raw_phrase)
-                if snippet and snippet not in cand.snippets:
-                    cand.snippets.append(snippet)
+            if len(cand.snippets) < SNIPPETS_PER_CANDIDATE and snippet not in cand.snippets:
+                cand.snippets.append(snippet)
 
-    survivors = [c for c in candidates.values() if len(c.companies) >= MIN_DISTINCT_COMPANIES]
+    dropped_by_verbatim = len(all_proposed_keys - set(candidates.keys()))
+
+    survivors = [
+        c for c in candidates.values()
+        if len(c.postings) >= MIN_VERBATIM_POSTINGS and len(c.companies) >= min_companies
+    ]
     survivors.sort(key=lambda c: (-len(c.companies), -len(c.postings)))
-    return survivors
+    return AggregationResult(survivors, dropped_by_verbatim, len(all_proposed_keys), min_companies)
 
 
 # --------------------------------------------------------------------------
@@ -452,7 +511,7 @@ def propose_categories(domain: str, candidates: list[_Candidate], existing_categ
 
 def build_approval_sheet(
     targets_by_domain: dict[str, list[dict]],
-    survivors_by_domain: dict[str, list[_Candidate]],
+    results_by_domain: dict[str, AggregationResult],
     proposals_by_domain: dict[str, dict[str, dict]],
     existing_categories: list[str],
     report_date: str,
@@ -463,18 +522,24 @@ def build_approval_sheet(
     lines.append(
         "Built for line-by-line human approval, same as taxonomy v1/v2. Candidates come from "
         "full-text LLM extraction over real posting descriptions (NOT n-gram mining), grouped by "
-        "the corrected domain classifier output, filtered to phrases appearing across >=3 distinct "
-        "companies, ranked by distinct companies then distinct postings. Nothing here is applied to "
-        "any taxonomy file automatically. Snippets are real excerpts found verbatim in the "
-        "contributing postings; a phrase with no verbatim match is marked as such rather than given "
-        "a fabricated snippet.\n"
+        "the corrected domain classifier output. A candidate must appear as an exact case-"
+        "insensitive substring in >=2 distinct source postings (verbatim requirement -- a phrase "
+        "the model proposed but never actually wrote is dropped, not shown), and must clear a "
+        "distinct-company bar scaled by domain size (>=3 companies for domains with >=60 target "
+        "postings, >=2 for smaller domains). Ranked by distinct companies then distinct postings. "
+        "Nothing here is applied to any taxonomy file automatically. Every snippet shown is a real "
+        "excerpt found verbatim in a contributing posting.\n"
     )
 
-    for domain in sorted(survivors_by_domain, key=lambda d: -len(survivors_by_domain[d])):
-        survivors = survivors_by_domain[domain][:APPROVAL_SHEET_CAP]
+    for domain in sorted(results_by_domain, key=lambda d: -len(results_by_domain[d].survivors)):
+        result = results_by_domain[domain]
+        survivors = result.survivors[:APPROVAL_SHEET_CAP]
         proposals = proposals_by_domain.get(domain, {})
         target_count = len(targets_by_domain.get(domain, []))
-        lines.append(f"## {domain} ({target_count} target postings, {len(survivors_by_domain[domain])} candidates survived >=3-company bar, showing top {len(survivors)})\n")
+        lines.append(
+            f"## {domain} ({target_count} target postings, min_companies_bar={result.min_companies_used}, "
+            f"{len(result.survivors)} candidates survived, showing top {len(survivors)})\n"
+        )
         for cand in survivors:
             proposal = proposals.get(cand.display)
             if proposal:
@@ -486,8 +551,7 @@ def build_approval_sheet(
             else:
                 category_str = "(no proposal -- Groq call failed or omitted)"
 
-            snippets = cand.snippets if cand.snippets else ["(no verbatim match found in contributing posting text)"]
-            snippet_str = " / ".join(f"“{s}”" for s in snippets)
+            snippet_str = " / ".join(f"“{s}”" for s in cand.snippets) if cand.snippets else "(verified verbatim but no snippet captured)"
             lines.append(
                 f"- **{cand.display}** -- postings={len(cand.postings)}, companies={len(cand.companies)}, "
                 f"category={category_str}\n  {snippet_str}"
@@ -503,12 +567,12 @@ def build_approval_sheet(
 def print_domain_summary(
     domain: str,
     target_count: int,
-    survivors: list[_Candidate],
+    result: AggregationResult,
     proposals: dict[str, dict],
     existing_lower: set[str],
 ) -> None:
     new_categories = set()
-    for cand in survivors:
+    for cand in result.survivors:
         proposal = proposals.get(cand.display)
         if not proposal:
             continue
@@ -519,16 +583,19 @@ def print_domain_summary(
             new_categories.add(str(proposal.get("proposed_category")))
 
     print(f"\n{'-' * 70}\n{domain}\n{'-' * 70}")
-    print(f"  target postings (skill_substantive<=1): {target_count}")
-    print(f"  candidates surviving >=3-company bar:   {len(survivors)}")
-    print(f"  proposed NEW categories:                {sorted(new_categories) if new_categories else '(none)'}")
+    print(f"  target postings (skill_substantive<=1):     {target_count}")
+    print(f"  distinct-company bar used:                  >={result.min_companies_used}")
+    print(f"  distinct proposed phrases (pre-verbatim):    {result.total_proposed}")
+    print(f"  dropped -- zero verbatim match anywhere:     {result.dropped_by_verbatim} (measures model invention)")
+    print(f"  candidates surviving verbatim + company bar: {len(result.survivors)}")
+    print(f"  proposed NEW categories:                     {sorted(new_categories) if new_categories else '(none)'}")
 
 
 # --------------------------------------------------------------------------
 # Orchestration
 # --------------------------------------------------------------------------
 
-def run() -> None:
+def run(only_domains: set[str] | None = None) -> None:
     from storage import get_postings_for_skill_gap_analysis, get_skill_mentions_for_analysis
 
     postings = get_postings_for_skill_gap_analysis()
@@ -542,37 +609,51 @@ def run() -> None:
         d for d, targets in targets_by_domain.items()
         if len(targets) >= MIN_TARGET_POSTINGS_PER_DOMAIN and d not in EXCLUDED_DOMAINS
     ]
+    if only_domains is not None:
+        skipped = [d for d in qualifying_domains if d not in only_domains]
+        if skipped:
+            print(f"\n--domains restricts processing to {sorted(only_domains)} -- skipping otherwise-qualifying domains: {sorted(skipped)}")
+        qualifying_domains = [d for d in qualifying_domains if d in only_domains]
+
     if not qualifying_domains:
-        print(f"\nNo domain has >={MIN_TARGET_POSTINGS_PER_DOMAIN} target postings (excluding {sorted(EXCLUDED_DOMAINS)}). Nothing to extract.")
+        print(f"\nNo domain has >={MIN_TARGET_POSTINGS_PER_DOMAIN} target postings (excluding {sorted(EXCLUDED_DOMAINS)}) after applying --domains, if given. Nothing to extract.")
         return
 
     report_date = _report_date()
     existing_categories = list(extract_skills._TAXONOMY["categories"].keys())
     existing_lower = {c.casefold() for c in existing_categories}
 
-    survivors_by_domain: dict[str, list[_Candidate]] = {}
+    results_by_domain: dict[str, AggregationResult] = {}
     proposals_by_domain: dict[str, dict[str, dict]] = {}
 
     print(f"\n{'=' * 78}\nTASK 2/3/4 -- FULL-TEXT EXTRACTION, AGGREGATION, CATEGORY PROPOSAL\n{'=' * 78}")
-    print(f"Qualifying domains ({len(qualifying_domains)}): {sorted(qualifying_domains)}")
+    print(f"Processing domains ({len(qualifying_domains)}): {sorted(qualifying_domains)}")
 
     for domain in qualifying_domains:
         targets = targets_by_domain[domain]
-        logger.info(f"[{domain}] extracting from {len(targets)} target postings")
+        min_companies = _min_companies_for(len(targets))
+        logger.info(f"[{domain}] extracting from {len(targets)} target postings (company bar >={min_companies})")
         extracted = extract_skills_for_domain(domain, targets, report_date)
-        survivors = aggregate_domain(domain, targets, extracted)
-        proposals = propose_categories(domain, survivors[:APPROVAL_SHEET_CAP], existing_categories)
+        result = aggregate_domain(domain, targets, extracted, min_companies)
+        proposals = propose_categories(domain, result.survivors[:APPROVAL_SHEET_CAP], existing_categories)
 
-        survivors_by_domain[domain] = survivors
+        results_by_domain[domain] = result
         proposals_by_domain[domain] = proposals
-        print_domain_summary(domain, len(targets), survivors, proposals, existing_lower)
+        print_domain_summary(domain, len(targets), result, proposals, existing_lower)
 
-    sheet_path = build_approval_sheet(targets_by_domain, survivors_by_domain, proposals_by_domain, existing_categories, report_date)
+    sheet_path = build_approval_sheet(targets_by_domain, results_by_domain, proposals_by_domain, existing_categories, report_date)
     print(f"\n{'=' * 78}\nApproval sheet written to {sheet_path} (proposal only -- nothing applied to any taxonomy file)\n{'=' * 78}")
 
 
 def main() -> None:
-    run()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Rukhwise taxonomy v3 skill-gap discovery")
+    parser.add_argument("--domains", type=str, default=None, help="Comma-separated domain keys to restrict TASK 2-4 to (still gated by the target-count qualification bar)")
+    args = parser.parse_args()
+
+    only_domains = {d.strip() for d in args.domains.split(",")} if args.domains else None
+    run(only_domains=only_domains)
 
 
 if __name__ == "__main__":

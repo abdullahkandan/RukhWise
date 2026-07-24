@@ -716,6 +716,30 @@ def update_postings_domain(rows: list[dict]) -> dict:
     return {"updated": updated, "failed": failed}
 
 
+def get_postings_for_domain_validation() -> list[dict]:
+    """id, title, description, domain, domain_method, domain_confidence
+    for every posting -- what validate_domain_classifier.py needs to
+    hand-audit the LLM-classified tier specifically (the tier the prior
+    validation round never sampled -- only the 'other' bucket was
+    checked)."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("postings")
+            .select("id,title,description,domain,domain_method,domain_confidence")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
 def get_postings_for_skill_gap_analysis() -> list[dict]:
     """id, company, title, description, domain for every posting -- what
     skill_gap_discovery.py needs: the CORRECTED domain (from
