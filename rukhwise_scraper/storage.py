@@ -66,6 +66,17 @@ alter table postings add column if not exists has_certification boolean;
 alter table postings add column if not exists experience_min_years integer;
 alter table postings add column if not exists experience_max_years integer;
 alter table postings add column if not exists experience_level text;
+
+-- Three-stage domain classification (see domain_classifier.py /
+-- domains.yaml). domain_method records which stage actually assigned the
+-- value -- rule_title | rule_description | llm | unclassified -- so every
+-- classification is auditable and re-runnable; domain_confidence is
+-- 1.0 for stage-1 title matches, the actual count-based margin ratio for
+-- stage-2 description matches, the LLM's own reported confidence for
+-- stage 3, and null when a posting was never confidently classified.
+alter table postings add column if not exists domain text;
+alter table postings add column if not exists domain_method text;
+alter table postings add column if not exists domain_confidence numeric;
 """
 
 # The forecasts table's real schema/trigger/RLS lives in the dedicated
@@ -266,6 +277,43 @@ end;
 $$;
 """
 
+# Batched write path for domain_classifier.py's output -- domain,
+# domain_method, domain_confidence. Same shape/convention as
+# update_postings_structured_batch: unconditional SET, since a re-run of
+# classify_domains.py is a full recomputation and a posting whose
+# classification changed (or regressed to unclassified) should reflect
+# that, not keep a stale prior value.
+UPDATE_POSTINGS_DOMAIN_FUNCTION_SQL = """\
+create or replace function update_postings_domain_batch(payload jsonb)
+returns table(id uuid)
+language plpgsql
+as $$
+#variable_conflict use_column
+begin
+    return query
+    with incoming as (
+        select *
+        from jsonb_to_recordset(payload) as x(
+            id uuid,
+            domain text,
+            domain_method text,
+            domain_confidence numeric
+        )
+    ),
+    upd as (
+        update postings p
+        set domain = incoming.domain,
+            domain_method = incoming.domain_method,
+            domain_confidence = incoming.domain_confidence
+        from incoming
+        where p.id = incoming.id
+        returning p.id
+    )
+    select upd.id from upd;
+end;
+$$;
+"""
+
 ALL_SQL = "\n".join([
     POSTINGS_TABLE_SQL,
     SKILL_MENTIONS_TABLE_SQL,
@@ -273,6 +321,7 @@ ALL_SQL = "\n".join([
     UPSERT_FUNCTION_SQL,
     ENRICH_FUNCTION_SQL,
     UPDATE_POSTINGS_STRUCTURED_FUNCTION_SQL,
+    UPDATE_POSTINGS_DOMAIN_FUNCTION_SQL,
 ])
 
 
@@ -611,6 +660,59 @@ def update_postings_structured(rows: list[dict]) -> dict:
             failed += len(batch)
 
     logger.info(f"update_postings_structured: updated={updated} failed={failed}")
+    return {"updated": updated, "failed": failed}
+
+
+def get_postings_for_domain_classification() -> list[dict]:
+    """id, source, title, description for every posting -- what
+    domain_classifier.py needs: title for stage 1, description for stages
+    2 and 3. Read-only; classify_domains.py's only write path is
+    update_postings_domain() below."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("postings")
+            .select("id,source,title,description")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def update_postings_domain(rows: list[dict]) -> dict:
+    """Batch-write domain_classifier.py's output -- domain, domain_method,
+    domain_confidence -- via update_postings_domain_batch. Each row needs
+    'id' plus all three fields; the RPC sets every field unconditionally,
+    so a re-run of classify_domains.py (e.g. after domains.yaml changes)
+    correctly overwrites a prior classification rather than leaving it
+    stale.
+
+    Returns {"updated": int, "failed": int}.
+    """
+    if not rows:
+        return {"updated": 0, "failed": 0}
+
+    client = _get_client()
+    updated = 0
+    failed = 0
+
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = rows[i : i + _BATCH_SIZE]
+        try:
+            result = client.rpc("update_postings_domain_batch", {"payload": batch}).execute()
+            updated += len(result.data or [])
+        except Exception as exc:
+            logger.error(f"Batch domain update failed ({len(batch)} rows): {exc}")
+            failed += len(batch)
+
+    logger.info(f"update_postings_domain: updated={updated} failed={failed}")
     return {"updated": updated, "failed": failed}
 
 

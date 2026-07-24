@@ -1,0 +1,475 @@
+# Rukhwise domain taxonomy -- controlled vocabulary for posting-level
+# domain classification (see domain_classifier.py). This is a FIXED list,
+# not emergent from data: extend it deliberately, by editing this file,
+# not by letting the classifier invent new buckets.
+#
+# Each domain's `keywords` list is used by BOTH rule stages: stage 1
+# (title, first match by count wins) and stage 2 (description, weighted
+# by count with a margin requirement over the runner-up). Keywords are
+# matched as whole words/phrases, case-insensitive, same convention as
+# taxonomy_v2.yaml's skill aliases -- a phrase must appear as a standalone
+# token sequence, not a substring inside another word.
+#
+# Each list mixes two registers deliberately: compact JOB-TITLE phrases
+# ("warehouse manager") that fire cleanly on stage 1's short title text,
+# and broader TOPIC words ("warehouse", "logistics") that fire on stage
+# 2's longer, more discursive description text ("warehouse management",
+# "logistics coordination" -- different grammatical forms of the same
+# topic that the title-phrase alone would miss). Order matters only as a
+# human-readable grouping; it has no effect on matching (stage 1/2 always
+# rank by count, never by list position).
+#
+# customer_support_bpo and construction_realestate are called out
+# explicitly here because they were the two largest gaps in the prior
+# title-only, four-source inference: both are large Pakistani employment
+# sectors the old vocabulary collapsed into other_unclassified.
+
+domains:
+  - key: technology_it
+    display: Technology / IT
+    keywords:
+      - software engineer
+      - software developer
+      - web developer
+      - mobile developer
+      - app developer
+      - full stack developer
+      - frontend developer
+      - backend developer
+      - data scientist
+      - data analyst
+      - data engineer
+      - machine learning engineer
+      - ai engineer
+      - devops engineer
+      - cloud engineer
+      - network engineer
+      - systems administrator
+      - system administrator
+      - it officer
+      - it support
+      - it manager
+      - database administrator
+      - qa engineer
+      - quality assurance engineer
+      - security analyst
+      - cyber security
+      - programmer
+      - software architect
+      - technical lead
+      - ui ux designer
+      - ux designer
+      - ui designer
+      - python developer
+      - java developer
+      - .net developer
+      - php developer
+      - software
+      - developer
+      - programming
+      - information technology
+
+  - key: engineering
+    display: Engineering (non-software, non-civil)
+    keywords:
+      - mechanical engineer
+      - electrical engineer
+      - industrial engineer
+      - chemical engineer
+      - engineering manager
+      - design engineer
+      - process engineer
+      - biomedical engineer
+      - aerospace engineer
+      - instrumentation engineer
+      - mechanical engineering
+      - electrical engineering
+      - industrial engineering
+      - chemical engineering
+
+  - key: manufacturing_production
+    display: Manufacturing / Production
+    keywords:
+      - production manager
+      - production supervisor
+      - production operator
+      - factory worker
+      - factory manager
+      - plant manager
+      - manufacturing engineer
+      - manufacturing supervisor
+      - assembly line
+      - quality control inspector
+      - quality inspector
+      - textile
+      - garments
+      - garment worker
+      - industrial worker
+      - packaging operator
+      - cnc operator
+      - production planning
+      - shift incharge
+      - manufacturing
+      - production line
+      - factory floor
+
+  - key: trades_technical
+    display: Trades / Technical
+    keywords:
+      - electrician
+      - plumber
+      - welder
+      - carpenter
+      - mechanic
+      - hvac technician
+      - fitter
+      - auto mechanic
+      - air conditioning technician
+      - refrigeration technician
+      - blacksmith
+      - technician
+      - machine operator
+      - welding
+      - plumbing
+      - carpentry
+
+  - key: construction_realestate
+    display: Construction / Real Estate
+    keywords:
+      - site engineer
+      - civil engineer
+      - construction manager
+      - construction supervisor
+      - site supervisor
+      - mason
+      - surveyor
+      - quantity surveyor
+      - architect
+      - real estate agent
+      - realtor
+      - property manager
+      - property consultant
+      - construction worker
+      - site foreman
+      - civil works
+      - construction
+      - real estate
+      - civil engineering
+      - building construction
+
+  - key: accounting_finance
+    display: Accounting / Finance
+    keywords:
+      - accountant
+      - accounts officer
+      - accounts manager
+      - finance officer
+      - finance manager
+      - bookkeeper
+      - auditor
+      - internal auditor
+      - tax consultant
+      - payroll officer
+      - financial analyst
+      - chief financial officer
+      - accounts payable
+      - accounts receivable
+      - chartered accountant
+      - financial controller
+      - accounting
+      - bookkeeping
+      - taxation
+      - payroll
+      - auditing
+
+  - key: sales_marketing
+    display: Sales / Marketing
+    keywords:
+      - sales executive
+      - sales officer
+      - sales manager
+      - sales representative
+      - business development executive
+      - business development manager
+      - business development officer
+      - marketing executive
+      - marketing manager
+      - digital marketing
+      - brand manager
+      - key account manager
+      - regional sales manager
+      - area sales manager
+      - territory manager
+      - business development
+      - marketing campaign
+      - sales targets
+
+  - key: customer_support_bpo
+    display: Customer Support / BPO
+    keywords:
+      - customer support
+      - customer service representative
+      - call center agent
+      - call centre agent
+      - bpo
+      - telemarketing
+      - telesales
+      - support agent
+      - help desk
+      - customer care representative
+      - live chat agent
+      - technical support representative
+      - inbound agent
+      - outbound agent
+      - customer service officer
+      - call center
+      - call centre
+      - customer service
+      - customer care
+
+  - key: admin_clerical
+    display: Admin / Clerical
+    keywords:
+      - admin officer
+      - administrative assistant
+      - office assistant
+      - receptionist
+      - clerk
+      - secretary
+      - front desk officer
+      - office coordinator
+      - data entry operator
+      - personal assistant
+      - executive assistant
+      - admin executive
+      - administrative
+      - clerical
+      - office administration
+      - data entry
+
+  - key: hr
+    display: Human Resources
+    keywords:
+      - hr officer
+      - hr executive
+      - hr manager
+      - hr generalist
+      - recruiter
+      - recruitment specialist
+      - talent acquisition
+      - hr business partner
+      - hr coordinator
+      - human resource
+      - hr assistant
+      - human resources
+      - recruitment
+      - hiring process
+
+  - key: education
+    display: Education
+    keywords:
+      - teacher
+      - tutor
+      - instructor
+      - lecturer
+      - professor
+      - academic coordinator
+      - principal
+      - school teacher
+      - subject teacher
+      - teaching assistant
+      - curriculum coordinator
+      - education consultant
+      - trainer
+      - teaching
+      - academic
+      - classroom
+      - curriculum
+
+  - key: healthcare
+    display: Healthcare
+    keywords:
+      - nurse
+      - doctor
+      - physician
+      - medical officer
+      - pharmacist
+      - dentist
+      - paramedic
+      - lab technician
+      - medical technologist
+      - physiotherapist
+      - radiologist
+      - surgeon
+      - medical assistant
+      - healthcare
+      - medical
+      - clinical
+      - patient care
+
+  - key: logistics_supply_chain
+    display: Logistics / Supply Chain
+    keywords:
+      - logistics officer
+      - logistics manager
+      - supply chain
+      - warehouse manager
+      - warehouse supervisor
+      - procurement officer
+      - procurement manager
+      - dispatch rider
+      - fleet manager
+      - courier
+      - delivery rider
+      - inventory manager
+      - import export officer
+      - logistics
+      - warehouse
+      - procurement
+      - inventory
+      - distribution
+      - fleet management
+      - supply chain management
+
+  - key: retail
+    display: Retail
+    keywords:
+      - cashier
+      - retail manager
+      - store manager
+      - sales associate
+      - showroom manager
+      - merchandiser
+      - retail sales
+      - store supervisor
+      - shop manager
+      - visual merchandiser
+      - retail
+      - store operations
+      - merchandising
+
+  - key: food_service
+    display: Food Service
+    keywords:
+      - chef
+      - cook
+      - waiter
+      - waitress
+      - barista
+      - kitchen staff
+      - restaurant manager
+      - catering
+      - steward
+      - bartender
+      - sous chef
+      - line cook
+      - pastry chef
+      - restaurant
+      - kitchen
+      - food service
+      - culinary
+
+  - key: hospitality_travel
+    display: Hospitality / Travel
+    keywords:
+      - hotel manager
+      - hospitality
+      - travel consultant
+      - tourism
+      - housekeeping
+      - front office executive
+      - concierge
+      - guest relations
+      - tour operator
+      - ticketing officer
+      - hotel
+      - travel agency
+      - guest services
+
+  - key: ngo_development
+    display: NGO / Development Sector
+    keywords:
+      - program officer
+      - project officer
+      - field officer
+      - monitoring and evaluation
+      - m&e officer
+      - development sector
+      - humanitarian
+      - donor relations
+      - csr officer
+      - ngo
+      - social mobilizer
+      - community mobilizer
+      - non-profit
+      - nonprofit
+      - humanitarian aid
+      - community development
+
+  - key: media_creative
+    display: Media / Creative
+    keywords:
+      - content writer
+      - graphic designer
+      - video editor
+      - photographer
+      - journalist
+      - creative director
+      - copywriter
+      - social media manager
+      - content creator
+      - animator
+      - illustrator
+      - videographer
+      - graphic design
+      - content writing
+      - video editing
+      - social media content
+
+  - key: legal
+    display: Legal
+    keywords:
+      - lawyer
+      - advocate
+      - legal advisor
+      - legal counsel
+      - paralegal
+      - attorney
+      - compliance officer
+      - legal officer
+      - corporate lawyer
+      - legal associate
+      - legal affairs
+      - law firm
+      - legal compliance
+
+  - key: agriculture
+    display: Agriculture
+    keywords:
+      - agriculture officer
+      - farm manager
+      - agronomist
+      - livestock
+      - veterinary
+      - crop specialist
+      - agricultural engineer
+      - farm supervisor
+      - agriculture
+      - farming
+      - agricultural
+
+  - key: security_services
+    display: Security Services
+    keywords:
+      - security guard
+      - security officer
+      - watchman
+      - security supervisor
+      - security manager
+      - chowkidar
+      - security services
+      - guard duty
+
+  - key: other
+    display: Other / Unclassified
+    keywords: []
