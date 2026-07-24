@@ -1,4 +1,4 @@
-"""Skill extraction: matches taxonomy_v2.yaml aliases against posting text.
+"""Skill extraction: matches taxonomy_v3.yaml aliases against posting text.
 
 Each posting reports a skill at most once in the output, regardless of how
 many times an alias appears in its text -- this is deliberate defense
@@ -12,10 +12,16 @@ attribute) alongside category on every entry -- see skill_requirement_type()
 below and output/taxonomy_v2_spec.md. Credential and experience are NOT
 taxonomy entries (they're structured postings columns, see
 structured_extraction.py); only language and attribute are new here,
-matched via the exact same alias mechanism as v1's 96 skills. This module
-never touches taxonomy_v1.yaml, which stays in place, untouched, as the
-historical record extraction_method='taxonomy_v1' rows were computed
-against.
+matched via the exact same alias mechanism as v1's 96 skills.
+
+v3 adds 7 new categories (health_clinical, lab_science, safety_compliance,
+supply_chain, electrical_mechanical, teaching, customer_service) plus
+substantive/non-substantive additions to existing categories -- see
+output/taxonomy_v3_approved.md for the line-by-line ruling and
+build_taxonomy_v3.py for how taxonomy_v3.yaml was mechanically built from
+v2. This module never touches taxonomy_v1.yaml or taxonomy_v2.yaml, which
+stay in place, untouched, as the historical record extraction_method=
+'taxonomy_v1'/'taxonomy_v2' rows were computed against.
 """
 
 from __future__ import annotations
@@ -30,7 +36,7 @@ from config import setup_logging
 
 logger = setup_logging()
 
-TAXONOMY_PATH = Path(__file__).parent / "taxonomy_v2.yaml"
+TAXONOMY_PATH = Path(__file__).parent / "taxonomy_v3.yaml"
 
 
 def _load_taxonomy() -> dict:

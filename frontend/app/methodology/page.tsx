@@ -222,13 +222,22 @@ export default function MethodologyPage() {
                   as provisional until more collection cycles accumulate.
                 </li>
                 <li>
-                  <strong className="text-java">Taxonomy coverage by domain.</strong> Skill
-                  coverage is currently deepest in technology and business-support roles and
-                  materially thinner in trades, food service, healthcare and education. This
-                  is measured, not estimated: a majority of postings in those domains
-                  currently produce one or zero substantive skill matches. Taxonomy
-                  expansion is underway and coverage will be re-measured against the same
-                  metric.
+                  <strong className="text-java">Taxonomy coverage by domain.</strong> A
+                  taxonomy expansion pass in July 2026 added categories for domains the
+                  matcher substantively missed — health and clinical work, lab science,
+                  safety and compliance, supply chain, electrical/mechanical trades,
+                  teaching, and customer service — built from real posting language, not
+                  assumption. Measured before and after: the share of postings with one or
+                  zero substantive skill matches fell from 75% to 19% in healthcare, 36% to
+                  9% in logistics and supply chain, and 84% to 52% in trades. Admin/clerical
+                  work improved too (71% to 57%) but remains the highest of any domain
+                  measured — not because the taxonomy is blind to it, but because
+                  administrative and customer-support postings in this market
+                  overwhelmingly describe workplace qualities (attention to detail,
+                  multitasking, empathy) rather than named competencies. That is how those
+                  roles are actually advertised here, and their coverage figures are
+                  expected to stay comparatively low permanently as a result — a correct
+                  measurement, not a gap still waiting to be closed.
                 </li>
               </ul>
             </Prose>

@@ -122,7 +122,7 @@ def _min_companies_for(target_count: int) -> int:
 EXCLUDED_DOMAINS = frozenset({"other"})
 
 _NON_SUBSTANTIVE_CATEGORIES = frozenset({"soft", "office_admin"})
-_CURRENT_EXTRACTION_METHOD = "taxonomy_v2"
+_CURRENT_EXTRACTION_METHOD = "taxonomy_v3"
 
 
 def _report_date() -> str:

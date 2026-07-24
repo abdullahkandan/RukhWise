@@ -40,7 +40,7 @@ from config import setup_logging  # noqa: E402
 logger = setup_logging()
 
 _NON_SUBSTANTIVE_CATEGORIES = frozenset({"soft", "office_admin"})
-_CURRENT_EXTRACTION_METHOD = "taxonomy_v2"
+_CURRENT_EXTRACTION_METHOD = "taxonomy_v3"
 
 
 def _is_blank(text: str | None) -> bool:

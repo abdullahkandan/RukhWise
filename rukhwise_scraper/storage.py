@@ -894,6 +894,33 @@ def get_postings_for_depth_comparison() -> list[dict]:
     return rows
 
 
+def get_postings_for_v3_depth_comparison() -> list[dict]:
+    """id, source, domain, degree_level, has_certification,
+    experience_level for every posting -- what compare_taxonomy_v3_depth.py
+    needs: the CORRECTED domain (domain_classifier.py's three-stage
+    classification, not drift.py's title-only inference used by the older
+    compare_taxonomy_depth.py) for grouping, source for the other grouping,
+    and the taxonomy-v2-introduced structured credential/experience signal
+    for requirement_substantive (unchanged by v3 -- those two are still
+    deliberately not taxonomy entries, see structured_extraction.py)."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("postings")
+            .select("id,source,domain,degree_level,has_certification,experience_level")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
 def get_skill_mentions_for_analysis() -> list[dict]:
     """posting_id, skill, category, requirement_type, extraction_method
     for every skill_mentions row -- what compare_taxonomy_depth.py needs

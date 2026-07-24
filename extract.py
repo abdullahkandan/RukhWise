@@ -1,7 +1,7 @@
 """Rukhwise skill + structured extraction entrypoint.
 
   python extract.py --all
-      Backfill: extraction_method='taxonomy_v2' over every posting
+      Backfill: extraction_method='taxonomy_v3' over every posting
       currently in Supabase, regardless of when/how it was collected.
       Also runs structured credential/experience extraction
       (structured_extraction.py) over the same postings, writing
@@ -21,10 +21,11 @@ SET, not coalesce), which is correct: if a posting's description changed
 enough to no longer match a prior extraction, the stale value should
 clear, not linger.
 
-taxonomy_v1.yaml and every extraction_method='taxonomy_v1' skill_mentions
-row are left in place, untouched -- this script only ever ADDS rows under
-the new extraction_method, so the v1 pass stays fully auditable (see
-output/taxonomy_v2_spec.md section 1).
+taxonomy_v1.yaml/taxonomy_v2.yaml and every extraction_method='taxonomy_v1'/
+'taxonomy_v2' skill_mentions row are left in place, untouched -- this script
+only ever ADDS rows under the new extraction_method, so both prior passes
+stay fully auditable (see output/taxonomy_v2_spec.md section 1 and
+output/taxonomy_v3_approved.md).
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from config import setup_logging  # noqa: E402
 
 logger = setup_logging()
 
-EXTRACTION_METHOD = "taxonomy_v2"
+EXTRACTION_METHOD = "taxonomy_v3"
 
 
 def run_extraction(run_id: str | None) -> dict:
