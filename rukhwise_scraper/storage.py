@@ -716,6 +716,31 @@ def update_postings_domain(rows: list[dict]) -> dict:
     return {"updated": updated, "failed": failed}
 
 
+def get_postings_for_blank_description_audit() -> list[dict]:
+    """id, source, domain, domain_method, domain_confidence, description,
+    skills_raw for every posting -- what investigate_blank_descriptions.py
+    (quantify the blank-description population, check whether skills_raw
+    is doing the work description can't) and backfill_llm_title_only.py
+    (identify domain_method='llm' rows actually classified from title
+    alone) both need."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("postings")
+            .select("id,source,domain,domain_method,domain_confidence,description,skills_raw")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
 def get_postings_for_domain_validation() -> list[dict]:
     """id, title, description, domain, domain_method, domain_confidence
     for every posting -- what validate_domain_classifier.py needs to

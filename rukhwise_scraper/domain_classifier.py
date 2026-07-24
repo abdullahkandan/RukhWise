@@ -28,7 +28,17 @@ LLM guess is distinguishable from "the LLM was never reached at all."
 Every posting gets exactly one of these domain_method values:
   rule_title        -- stage 1 assigned a real domain
   rule_description   -- stage 2 assigned a real domain
-  llm                -- stage 3 assigned a real domain (confidence >= threshold)
+  llm                -- stage 3 assigned a real domain, from title+description
+  llm_title_only     -- stage 3 assigned a real domain from TITLE ALONE (the
+                         posting's description was blank/null at classification
+                         time). Investigation found 67% of the original 'llm'
+                         tier had blank descriptions, with the model still
+                         self-reporting confidence up to 1.0 -- a model cannot
+                         be grounded-confident from a two-word title, so this
+                         method's domain_confidence is capped at
+                         LLM_TITLE_ONLY_CONFIDENCE_CAP regardless of what the
+                         model returned, the same principle applied to
+                         forecasts without a baseline elsewhere in this project.
   unclassified        -- ended up 'other', regardless of which stage(s) were tried
 Storing the method is the point: every classification is auditable, and
 which stage is carrying the corpus is directly measurable.
@@ -59,6 +69,7 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_BATCH_SIZE = 20
 DESCRIPTION_SNIPPET_CHARS = 400
 LLM_CONFIDENCE_THRESHOLD = 0.6
+LLM_TITLE_ONLY_CONFIDENCE_CAP = 0.6  # a title-only guess is never stored as more confident than the acceptance threshold itself
 GROQ_MAX_RETRIES = 5
 GROQ_BATCH_DELAY_SECONDS = 2.5
 
@@ -310,16 +321,25 @@ def classify_postings(postings: list[dict], with_llm: bool = True) -> list[dict]
         p["id"]: ("other", None) for p in stage3_candidates
     }
     llm_assigned = 0
+    llm_title_only_assigned = 0
     for p in stage3_candidates:
         pid = p["id"]
         domain, confidence = llm_results.get(pid, ("other", None))
-        if domain != "other":
+        title_only = not (p.get("description") or "").strip()
+        if domain != "other" and title_only:
+            method = "llm_title_only"
+            confidence = min(confidence, LLM_TITLE_ONLY_CONFIDENCE_CAP) if confidence is not None else LLM_TITLE_ONLY_CONFIDENCE_CAP
+            llm_title_only_assigned += 1
+        elif domain != "other":
             method = "llm"
             llm_assigned += 1
         else:
             method = "unclassified"
         results[pid] = {"id": pid, "domain": domain, "domain_method": method, "domain_confidence": confidence}
 
-    logger.info(f"Stage 3 (LLM) assigned a real domain to {llm_assigned}/{len(stage3_candidates)}")
+    logger.info(
+        f"Stage 3 (LLM) assigned a real domain to {llm_assigned + llm_title_only_assigned}/{len(stage3_candidates)} "
+        f"({llm_title_only_assigned} of those from title alone, confidence capped at {LLM_TITLE_ONLY_CONFIDENCE_CAP})"
+    )
 
     return [results[p["id"]] for p in postings]
