@@ -716,6 +716,32 @@ def update_postings_domain(rows: list[dict]) -> dict:
     return {"updated": updated, "failed": failed}
 
 
+def get_postings_for_skill_gap_analysis() -> list[dict]:
+    """id, company, title, description, domain for every posting -- what
+    skill_gap_discovery.py needs: the CORRECTED domain (from
+    domain_classifier.py's three-stage classification, not drift.py's
+    title-only inference) for grouping, company for the distinct-company
+    aggregation bar, and full description text for the LLM extraction
+    pass (unlike drift.py's n-gram mining, this reads the whole
+    description, not a snippet window)."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("postings")
+            .select("id,company,title,description,domain")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
 # --------------------------------------------------------------------------
 # Forecasting (forecast.py) -- reads needed to compute weekly actuals/
 # history, plus the forecasts table's own writes. Uses the same service-role
