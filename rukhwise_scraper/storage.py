@@ -766,20 +766,24 @@ def get_postings_for_domain_validation() -> list[dict]:
 
 
 def get_postings_for_skill_gap_analysis() -> list[dict]:
-    """id, company, title, description, domain for every posting -- what
-    skill_gap_discovery.py needs: the CORRECTED domain (from
-    domain_classifier.py's three-stage classification, not drift.py's
-    title-only inference) for grouping, company for the distinct-company
-    aggregation bar, and full description text for the LLM extraction
-    pass (unlike drift.py's n-gram mining, this reads the whole
-    description, not a snippet window)."""
+    """id, source, company, title, description, domain, skills_raw for
+    every posting -- what skill_gap_discovery.py needs: the CORRECTED
+    domain (from domain_classifier.py's three-stage classification, not
+    drift.py's title-only inference) for grouping, company for the
+    distinct-company aggregation bar, and full description text for the
+    LLM extraction pass (unlike drift.py's n-gram mining, this reads the
+    whole description, not a snippet window). source/skills_raw are also
+    what skill_gap_source_diagnostic.py needs to tell whether a domain's
+    low candidate yield is genuine or an artifact of extracting from
+    postings with no description text (skills_raw is the alternative,
+    already-structured source for those)."""
     client = _get_client()
     rows = []
     offset = 0
     while True:
         res = (
             client.table("postings")
-            .select("id,company,title,description,domain")
+            .select("id,source,company,title,description,domain,skills_raw")
             .range(offset, offset + _QUERY_PAGE_SIZE - 1)
             .execute()
         )
