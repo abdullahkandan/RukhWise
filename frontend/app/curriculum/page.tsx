@@ -113,6 +113,9 @@ export default async function CurriculumPage() {
           matches anywhere in either curriculum document — not in a course title, not in a course&rsquo;s
           own stated learning outcomes.
         </p>
+        <p className="mt-3 max-w-2xl font-sans text-sm leading-relaxed text-cream/50">
+          {data.demanded_not_taught_note}
+        </p>
 
         <ol className="mt-10 flex flex-col gap-1">
           {data.demanded_not_taught.map((row, i) => (

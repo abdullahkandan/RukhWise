@@ -1691,11 +1691,10 @@ def backtest_detail():
 # other domain this project tracks. Market demand is deliberately scoped
 # to postings in technology_it/engineering to match.
 #
-# Unlike every other endpoint above, this explicitly filters mentions to
-# extraction_method='taxonomy_v3' (the current pass) and uses
-# get_taxonomy_v3() for display names -- see the note on
-# queries.get_taxonomy() for why that matters and why it's NOT applied
-# retroactively to the rest of this file here.
+# queries.get_skill_mentions() is already scoped to queries.ACTIVE_TAXONOMY
+# (see that constant's comment) and queries.get_taxonomy() already loads
+# its display/category names, so nothing here needs its own taxonomy
+# filtering anymore -- it used to, before that was centralized.
 # --------------------------------------------------------------------------
 
 CURRICULUM_SCOPE_NOTE = (
@@ -1710,31 +1709,41 @@ CURRICULUM_TAUGHT_NOT_DEMANDED_NOTE = (
     "never appear as a NAMED requirement in a job posting even though the role "
     "depends on them."
 )
+CURRICULUM_DEMANDED_NOT_TAUGHT_NOTE = (
+    "Soft skills and office/admin skills (communication, documentation, scheduling, "
+    "and similar) are excluded from this list entirely, even when the market data "
+    "alone would qualify them. Curriculum documents DO cover these through general-"
+    "education requirements the course parser can't itemize skill-by-skill, so their "
+    "appearance here would be a matching artifact of that gap, not a real finding."
+)
 CURRICULUM_MATCHING_NOTE = (
-    "Matching is taxonomy-based: a skill outside taxonomy_v3 is invisible on BOTH "
-    "sides of this comparison, not just one. A curriculum topic and a market demand "
-    "that are both real but both unnamed in the taxonomy will never appear here."
+    "Matching is taxonomy-based: a skill outside the active taxonomy is invisible "
+    "on BOTH sides of this comparison, not just one. A curriculum topic and a "
+    "market demand that are both real but both unnamed in the taxonomy will never "
+    "appear here."
 )
 CURRICULUM_MARKET_DOMAINS = ("technology_it", "engineering")
-CURRICULUM_EXTRACTION_METHOD = "taxonomy_v3"
 CURRICULUM_GAP_MIN_COMPANIES = 5
 CURRICULUM_NEAR_ZERO_POSTINGS = 2
+# The headline gap list is about SUBSTANTIVE skills specifically -- soft
+# skills (communication, teamwork) and office_admin (data entry, scheduling)
+# are near-universal in postings AND get picked up on the curriculum side via
+# general-education requirements the course parser can't itemize, so their
+# presence in "demanded, not taught" is a matching artifact of that GenEd gap,
+# not a real substantive-curriculum finding. Excluded from the list entirely.
+CURRICULUM_GAP_EXCLUDED_CATEGORIES = frozenset({"soft", "office_admin"})
 
 
 def _curriculum_market_stats() -> tuple[dict[str, set[str]], dict[str, set[str]], int]:
     """Returns (skill -> distinct posting ids, skill -> distinct company
     keys, total postings considered), restricted to postings in
-    CURRICULUM_MARKET_DOMAINS and to extraction_method='taxonomy_v3'."""
+    CURRICULUM_MARKET_DOMAINS."""
     postings = queries.get_postings()
     mentions = queries.get_skill_mentions()
 
     scoped_postings = [p for p in postings if p.get("domain") in CURRICULUM_MARKET_DOMAINS]
     scoped_ids = {p["id"] for p in scoped_postings}
-
-    scoped_mentions = [
-        m for m in mentions
-        if m["posting_id"] in scoped_ids and m.get("extraction_method") == CURRICULUM_EXTRACTION_METHOD
-    ]
+    scoped_mentions = [m for m in mentions if m["posting_id"] in scoped_ids]
 
     skill_postings = _skill_postings_map(scoped_mentions)
     skill_companies = _skill_company_map(scoped_postings, scoped_mentions)
@@ -1752,7 +1761,7 @@ def _curriculum_skill_courses() -> dict[str, set[str]]:
 
 
 def _build_curriculum_alignment() -> dict:
-    taxonomy = queries.get_taxonomy_v3()
+    taxonomy = queries.get_taxonomy()
     skill_postings, skill_companies, total_market_postings = _curriculum_market_stats()
     skill_courses = _curriculum_skill_courses()
     courses = queries.get_curriculum_courses()
@@ -1781,14 +1790,18 @@ def _build_curriculum_alignment() -> dict:
     taught_and_demanded.sort(key=lambda r: -r["posting_count"])
 
     # b) DEMANDED NOT TAUGHT -- the headline list. >=5 distinct companies,
-    # zero curriculum matches. Ranked by company count (the qualifying
-    # metric), posting count as tiebreak.
+    # zero curriculum matches, and a SUBSTANTIVE skill (soft/office_admin
+    # excluded -- see CURRICULUM_GAP_EXCLUDED_CATEGORIES). Ranked by company
+    # count (the qualifying metric), posting count as tiebreak.
     demanded_not_taught = []
     for skill in (all_market_skills - all_curriculum_skills):
+        entry = _display(skill)
+        if entry["category"] in CURRICULUM_GAP_EXCLUDED_CATEGORIES:
+            continue
         company_count = len(skill_companies.get(skill, ()))
         if company_count >= CURRICULUM_GAP_MIN_COMPANIES:
             demanded_not_taught.append({
-                **_display(skill),
+                **entry,
                 "posting_count": len(skill_postings[skill]),
                 "company_count": company_count,
             })
@@ -1821,6 +1834,7 @@ def _build_curriculum_alignment() -> dict:
         "courses_unmatched": len(courses) - len(matched_course_ids),
         "taught_and_demanded": taught_and_demanded,
         "demanded_not_taught": demanded_not_taught,
+        "demanded_not_taught_note": CURRICULUM_DEMANDED_NOT_TAUGHT_NOTE,
         "taught_not_demanded": taught_not_demanded,
         "taught_not_demanded_note": CURRICULUM_TAUGHT_NOT_DEMANDED_NOTE,
     }
@@ -1844,6 +1858,7 @@ def curriculum_gaps():
     return {
         "scope_note": data["scope_note"],
         "matching_note": data["matching_note"],
+        "demanded_not_taught_note": data["demanded_not_taught_note"],
         "market_domains": data["market_domains"],
         "min_companies_threshold": CURRICULUM_GAP_MIN_COMPANIES,
         "count": len(data["demanded_not_taught"]),
@@ -1863,9 +1878,8 @@ def curriculum_gaps():
 #
 # Depends on job_family (title normalization, job_family_classifier.py)
 # and experience_level (structured_extraction.py's fresh/junior/mid/senior
-# bucketing). Scoped to extraction_method='taxonomy_v3', like the
-# curriculum endpoints above, for the same reason (see queries.get_taxonomy()'s
-# note) -- this is new code, not the pre-existing blended-taxonomy path.
+# bucketing). mentions passed in here comes from queries.get_skill_mentions(),
+# already scoped to queries.ACTIVE_TAXONOMY -- nothing extra to filter here.
 # --------------------------------------------------------------------------
 
 PATHS_HONEST_CONSTRAINT = (
@@ -1877,16 +1891,15 @@ PATHS_LEVELS = ["fresh", "junior", "mid", "senior"]
 PATHS_MIN_FAMILY_POSTINGS = 15
 PATHS_MIN_LEVELS = 2
 PATHS_MIN_SKILL_COMPANIES = 3  # floor for a skill to count in a delta OR a match signature
-PATHS_EXTRACTION_METHOD = "taxonomy_v3"
 PATHS_MATCH_THRESHOLD = _STRONG_MATCH_THRESHOLD  # same "70% covered" bar as /coverage
 
 
 def _build_family_path(family_key: str, family_display: str, fam_postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict:
     """fam_postings: every posting with job_family == family_key (any
-    experience_level, including None). mentions: already scoped to
-    PATHS_EXTRACTION_METHOD. Returns has_data=False with an honest reason
-    naming the unmet threshold when the family doesn't qualify -- never a
-    thin result presented as a finding."""
+    experience_level, including None). mentions: queries.get_skill_mentions(),
+    already scoped to the active taxonomy. Returns has_data=False with an
+    honest reason naming the unmet threshold when the family doesn't
+    qualify -- never a thin result presented as a finding."""
     base = {"family": family_key, "display": family_display}
 
     if len(fam_postings) < PATHS_MIN_FAMILY_POSTINGS:
@@ -2005,10 +2018,9 @@ def _build_all_family_paths() -> dict[str, dict]:
     together in one pass so /paths/match doesn't refetch/refilter
     postings once per family."""
     families_meta = queries.get_job_families()
-    taxonomy = queries.get_taxonomy_v3()
+    taxonomy = queries.get_taxonomy()
     postings = queries.get_postings()
     mentions = queries.get_skill_mentions()
-    v3_mentions = [m for m in mentions if m.get("extraction_method") == PATHS_EXTRACTION_METHOD]
 
     postings_by_family: dict[str, list[dict]] = defaultdict(list)
     for p in postings:
@@ -2017,7 +2029,7 @@ def _build_all_family_paths() -> dict[str, dict]:
             postings_by_family[fam].append(p)
 
     return {
-        meta["key"]: _build_family_path(meta["key"], meta["display"], postings_by_family.get(meta["key"], []), v3_mentions, taxonomy)
+        meta["key"]: _build_family_path(meta["key"], meta["display"], postings_by_family.get(meta["key"], []), mentions, taxonomy)
         for meta in families_meta
     }
 
@@ -2102,7 +2114,7 @@ def paths_match(payload: PathsMatchRequest):
     matched=False (not a weak guess) when no family/level clears the
     match threshold; next_level=None when the matched level is already
     the top one this family has data for."""
-    taxonomy = queries.get_taxonomy_v3()
+    taxonomy = queries.get_taxonomy()
     # Same soft-skill exclusion as /coverage -- a family/level "signature"
     # is built from technical skill counts only, so a soft skill in the
     # input can never itself be matched into.

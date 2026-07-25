@@ -27,8 +27,21 @@ from supabase import Client, create_client
 from cache import cached
 
 _PROJECT_ROOT = Path(__file__).parent.parent
-_TAXONOMY_PATH = _PROJECT_ROOT / "rukhwise_scraper" / "taxonomy_v1.yaml"
-_TAXONOMY_V3_PATH = _PROJECT_ROOT / "rukhwise_scraper" / "taxonomy_v3.yaml"
+
+# --- Single source of truth for which taxonomy pass is live -----------------
+# P0 fix: this used to be implicit and inconsistent -- get_taxonomy() read
+# taxonomy_v1.yaml while ~14 call sites across main.py fetched
+# skill_mentions with no extraction_method filter at all, silently blending
+# taxonomy_v1/v2/v3 mention rows together on every existing endpoint (v2/v3-
+# only skill keys were invisible or mis-labeled everywhere except the
+# curriculum endpoints, which had already been scoped to v3 by hand). Fixed
+# by making this the ONE place that names the active pass: get_skill_mentions()
+# below filters to it at the query layer (every caller gets a clean single-
+# taxonomy view automatically, nothing left to remember), and get_taxonomy()
+# loads its display/category names. Bump this one constant to move the whole
+# API to a future taxonomy_v4 in one place.
+ACTIVE_TAXONOMY = "taxonomy_v3"
+_TAXONOMY_PATH = _PROJECT_ROOT / "rukhwise_scraper" / f"{ACTIVE_TAXONOMY}.yaml"
 _JOB_FAMILIES_PATH = _PROJECT_ROOT / "rukhwise_scraper" / "job_families.yaml"
 
 load_dotenv(_PROJECT_ROOT / ".env")
@@ -103,36 +116,23 @@ def get_postings() -> list[dict]:
 
 @cached()
 def get_skill_mentions() -> list[dict]:
-    """Every skill_mentions row (posting_id, skill, category, extraction_method)."""
-    return _fetch_all("skill_mentions", "posting_id,skill,category,extraction_method")
+    """Every skill_mentions row for ACTIVE_TAXONOMY only (posting_id, skill,
+    category, extraction_method) -- filtered here, at the query layer, so
+    every one of main.py's callers gets a clean single-taxonomy view with
+    nothing to remember. This is the fix for the taxonomy-blending bug: see
+    ACTIVE_TAXONOMY's comment above for what was wrong before."""
+    return _fetch_all(
+        "skill_mentions", "posting_id,skill,category,extraction_method",
+        filters={"extraction_method": ACTIVE_TAXONOMY},
+    )
 
 
 @cached()
 def get_taxonomy() -> dict:
-    """Not a Supabase read, but still centralized here -- both queries.py
-    and main.py need skill display names/categories, and this is the one
-    place that touches the filesystem for it.
-
-    NOTE (found while building curriculum alignment, not fixed here --
-    out of scope for that task, flagged separately): this reads
-    taxonomy_v1.yaml, and none of main.py's ~14 get_skill_mentions()
-    call sites filter by extraction_method. Every existing endpoint is
-    therefore blending taxonomy_v1/v2/v3 mention rows together and
-    looking up display/category names against v1 only -- v2/v3-only
-    skill keys (customer_service's v3 category correction, every new
-    taxonomy_v3 entry) are invisible or mis-labeled everywhere except
-    the curriculum endpoints below, which use get_taxonomy_v3() and
-    explicitly filter to extraction_method='taxonomy_v3' instead."""
+    """Display names/categories for ACTIVE_TAXONOMY. Not a Supabase read,
+    but still centralized here -- both queries.py and main.py need this,
+    and this is the one place that touches the filesystem for it."""
     with open(_TAXONOMY_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-@cached()
-def get_taxonomy_v3() -> dict:
-    """Current taxonomy (v3) -- used by the curriculum alignment
-    endpoints specifically, which need display/category names that
-    actually exist for v3-only skill keys."""
-    with open(_TAXONOMY_V3_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -191,7 +191,7 @@ def get_job_families() -> list[dict]:
     keywords) -- see job_family_classifier.py for the module that
     actually classifies postings against it. Read directly from the
     YAML rather than importing that module, same reasoning as
-    get_taxonomy_v3(): this API package stays self-contained."""
+    get_taxonomy(): this API package stays self-contained."""
     with open(_JOB_FAMILIES_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f)["families"]
 
