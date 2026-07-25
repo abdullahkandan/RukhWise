@@ -1710,11 +1710,15 @@ CURRICULUM_TAUGHT_NOT_DEMANDED_NOTE = (
     "depends on them."
 )
 CURRICULUM_DEMANDED_NOT_TAUGHT_NOTE = (
-    "Soft skills and office/admin skills (communication, documentation, scheduling, "
-    "and similar) are excluded from this list entirely, even when the market data "
-    "alone would qualify them. Curriculum documents DO cover these through general-"
-    "education requirements the course parser can't itemize skill-by-skill, so their "
-    "appearance here would be a matching artifact of that gap, not a real finding."
+    "This list covers teachable technical and professional skills only. Workplace "
+    "attributes (on-site, shift, full-time), credentials, languages, and generic "
+    "workplace qualities are excluded -- a curriculum can't teach or fail to teach "
+    "those, so their absence isn't a gap. Soft skills and office/admin skills "
+    "(communication, documentation, scheduling, and similar) are also excluded, even "
+    "when the market data alone would qualify them: curriculum documents DO cover "
+    "these through general-education requirements the course parser can't itemize "
+    "skill-by-skill, so their appearance here would be a matching artifact of that "
+    "gap, not a real finding."
 )
 CURRICULUM_MATCHING_NOTE = (
     "Matching is taxonomy-based: a skill outside the active taxonomy is invisible "
@@ -1731,6 +1735,8 @@ CURRICULUM_NEAR_ZERO_POSTINGS = 2
 # general-education requirements the course parser can't itemize, so their
 # presence in "demanded, not taught" is a matching artifact of that GenEd gap,
 # not a real substantive-curriculum finding. Excluded from the list entirely.
+# (Separately, non-skill requirement_types -- attribute, language -- are
+# excluded from ALL THREE lists upstream, in _is_teachable_skill below.)
 CURRICULUM_GAP_EXCLUDED_CATEGORIES = frozenset({"soft", "office_admin"})
 
 
@@ -1774,8 +1780,19 @@ def _build_curriculum_alignment() -> dict:
             "category": spec.get("category", "unknown"),
         }
 
-    all_market_skills = set(skill_postings.keys())
-    all_curriculum_skills = set(skill_courses.keys())
+    def _is_teachable_skill(skill_key: str) -> bool:
+        """requirement_type == 'skill' only (excludes 'attribute' --
+        work_arrangement entries like On-Site/Hybrid/shift -- and
+        'language'; credential/experience aren't taxonomy entries at all,
+        see structured_extraction.py). A curriculum can't teach, or fail
+        to teach, a workplace attribute or a language requirement -- their
+        presence in any of the three lists below is a matching artifact,
+        not a finding. Filtered once, on both input sets, so it can't leak
+        into just one of the three derived lists."""
+        return taxonomy["skills"].get(skill_key, {}).get("requirement_type", "skill") == "skill"
+
+    all_market_skills = {s for s in skill_postings.keys() if _is_teachable_skill(s)}
+    all_curriculum_skills = {s for s in skill_courses.keys() if _is_teachable_skill(s)}
 
     # a) TAUGHT AND DEMANDED -- ranked by market posting count.
     taught_and_demanded = [
