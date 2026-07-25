@@ -21,19 +21,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Both steps below also run skill extraction (taxonomy_v1) automatically
-      # for the postings they touch -- collect.py calls extract.run_extraction()
+      # Every step below also runs skill extraction (taxonomy_v3) automatically
+      # for the postings it touches -- collect.py calls extract.run_extraction()
       # after upsert+enrichment, scoped to that run's scrape_run_id. No separate
       # extraction step is needed here; --enrich-all / extract.py --all are
       # one-time backfill commands run manually, not part of the schedule.
       #
-      # Each step also incrementally classifies domain and job_family for
-      # every posting still missing an answer (collect.py's
-      # _classify_pending(), called after extraction) -- not just this
-      # run's own new postings, the whole current backlog. No separate
-      # workflow step needed for this either; --all full-corpus
-      # reclassification (classify_domains.py / classify_job_families.py)
-      # stays a manual, explicit command, never scheduled.
+      # Domain/job-family classification is deliberately NOT run here -- it
+      # depends on Groq, and this workflow must stay dependency-free on
+      # everything except the job boards themselves. See the separate
+      # .github/workflows/classify.yml, on its own daily schedule.
       - name: Run Mustakbil collection (general feed)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -58,3 +55,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python collect.py --source indeed
+
+      # LinkedIn via JobSpy -- same "not yet proven to survive GitHub's
+      # datacenter IPs" situation Indeed was in before its own first
+      # workflow_dispatch confirmed real rows landed. Two streams
+      # (results_wanted=50 each, see jobspy_source.py's LINKEDIN_STREAMS),
+      # 30s slept between them, then the existing mandatory geo-filter and
+      # staleness handling -- unchanged. continue-on-error so a block or
+      # rate-limit here never fails collection; collect.py's own log ends
+      # with an explicit PASS/FAIL verdict guide (requested vs received
+      # per stream, any 429s, inserted count) so one workflow_dispatch run
+      # is judgeable without cross-referencing anything else.
+      - name: Run LinkedIn collection (JobSpy)
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python collect.py --source linkedin

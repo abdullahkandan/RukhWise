@@ -26,8 +26,12 @@
   python collect.py --source linkedin
       JobSpy, same two-stream shape, plus a mandatory geo filter (LinkedIn's
       own location search leaks non-Pakistani listings) and 30s between
-      streams. Local/best-effort only, deliberately NOT in collect.yml --
-      run this by hand, same as Rozee's --live path.
+      streams. In collect.yml's daily schedule now, testing whether
+      LinkedIn tolerates GitHub's datacenter IPs the way Indeed did --
+      wrapped so a block/throttle there doesn't fail the whole job, since
+      this hasn't been proven yet at time of writing. Ends with an
+      explicit pass/fail verdict guide in the log (see run_linkedin's
+      LINKEDIN_PASS_MIN_YIELD_PER_STREAM).
 
 Every Mustakbil collection run (general or --category) auto-enriches only
 the postings it newly inserted -- already-known postings aren't re-fetched
@@ -168,16 +172,24 @@ def run_indeed(run_id: str) -> None:
     )
 
 
+LINKEDIN_PASS_MIN_YIELD_PER_STREAM = 30  # conservative floor -- local runs saw ~40-50/stream of 50 requested
+
+
 def run_linkedin(run_id: str) -> None:
     """Two JobSpy streams, 30s slept between them (jobspy_source.py), then
     a MANDATORY geo filter -- LinkedIn's own location search has been
     observed to leak non-Pakistani listings even with location="Pakistan".
-    Local/best-effort only, deliberately not in collect.yml -- run this
-    by hand, same as Rozee's --live path."""
+    In collect.yml's daily schedule now, testing whether LinkedIn survives
+    GitHub's datacenter IPs the way Indeed did -- wrapped in
+    continue-on-error there, same as Indeed, since this hasn't been proven
+    yet at time of writing. Ends with an explicit pass/fail verdict guide
+    (see LINKEDIN_PASS_MIN_YIELD_PER_STREAM) so a single workflow_dispatch
+    run's log is judgeable on its own, without cross-referencing anything
+    external."""
     from jobspy_source import STALE_DAYS_THRESHOLD, fetch_linkedin_jobs
     from storage import upsert_postings
 
-    logger.info(f"[{run_id}] LinkedIn collection starting (JobSpy, 2 streams, local/best-effort)")
+    logger.info(f"[{run_id}] LinkedIn collection starting (JobSpy, 2 streams)")
     result = fetch_linkedin_jobs()
     jobs = result["jobs"]
     for stream in result["stream_results"]:
@@ -201,6 +213,25 @@ def run_linkedin(run_id: str) -> None:
         postings_parsed=len(jobs),
         counts=counts,
         extract_result=extract_result,
+    )
+
+    # ---- Pass/fail verdict guide -- judge this dispatch from the log alone ----
+    low_yield_streams = [
+        s["category"] for s in result["stream_results"]
+        if s["requested"] > 0 and s["received"] < LINKEDIN_PASS_MIN_YIELD_PER_STREAM
+    ]
+    heuristic = "LIKELY OK" if not low_yield_streams else "LIKELY BLOCKED/THROTTLED"
+    logger.info(
+        f"[{run_id}] LINKEDIN VERDICT GUIDE -- PASS: each stream receives a yield comparable to "
+        f"local runs (roughly 40-50 of the 50 requested), with no 429/rate-limit errors logged "
+        f"above for either stream. FAIL: a stream's received count is low or zero, or a 429/"
+        f"rate-limit error appears in the stream failure log above -- that is the signal "
+        f"GitHub's datacenter IPs are being throttled."
+    )
+    logger.info(
+        f"[{run_id}] LINKEDIN VERDICT (heuristic, received-count only -- still check the log above "
+        f"for 429s): {heuristic} -- inserted={counts['inserted']}, updated={counts['updated']}, "
+        f"stream(s) below {LINKEDIN_PASS_MIN_YIELD_PER_STREAM} received: {low_yield_streams or 'none'}"
     )
 
 
