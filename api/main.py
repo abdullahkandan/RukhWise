@@ -1852,6 +1852,305 @@ def curriculum_gaps():
 
 
 # --------------------------------------------------------------------------
+# /paths/{family} -- skill adjacency by seniority, within a job_family
+# (see job_family_classifier.py for how postings get that field).
+#
+# HONEST CONSTRAINT: job postings never show the same person twice, so
+# career transitions cannot be observed. Everything below infers what
+# employers ASK FOR at each experience level within a family, and the
+# delta between levels -- it is NOT observed career movement. This text
+# is repeated verbatim in every API response below and on the page.
+#
+# Depends on job_family (title normalization, job_family_classifier.py)
+# and experience_level (structured_extraction.py's fresh/junior/mid/senior
+# bucketing). Scoped to extraction_method='taxonomy_v3', like the
+# curriculum endpoints above, for the same reason (see queries.get_taxonomy()'s
+# note) -- this is new code, not the pre-existing blended-taxonomy path.
+# --------------------------------------------------------------------------
+
+PATHS_HONEST_CONSTRAINT = (
+    "Job postings never show the same person twice, so career transitions cannot be "
+    "observed. This infers what employers ask for at each level within a family, and "
+    "the delta between levels -- it is not observed career movement."
+)
+PATHS_LEVELS = ["fresh", "junior", "mid", "senior"]
+PATHS_MIN_FAMILY_POSTINGS = 15
+PATHS_MIN_LEVELS = 2
+PATHS_MIN_SKILL_COMPANIES = 3  # floor for a skill to count in a delta OR a match signature
+PATHS_EXTRACTION_METHOD = "taxonomy_v3"
+PATHS_MATCH_THRESHOLD = _STRONG_MATCH_THRESHOLD  # same "70% covered" bar as /coverage
+
+
+def _build_family_path(family_key: str, family_display: str, fam_postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict:
+    """fam_postings: every posting with job_family == family_key (any
+    experience_level, including None). mentions: already scoped to
+    PATHS_EXTRACTION_METHOD. Returns has_data=False with an honest reason
+    naming the unmet threshold when the family doesn't qualify -- never a
+    thin result presented as a finding."""
+    base = {"family": family_key, "display": family_display}
+
+    if len(fam_postings) < PATHS_MIN_FAMILY_POSTINGS:
+        return {
+            **base,
+            "has_data": False,
+            "n_postings": len(fam_postings),
+            "levels_present": [],
+            "reason": (
+                f"Only {len(fam_postings)} posting(s) currently classified into this "
+                f"family -- need at least {PATHS_MIN_FAMILY_POSTINGS}."
+            ),
+        }
+
+    levels_present = [lvl for lvl in PATHS_LEVELS if any(p.get("experience_level") == lvl for p in fam_postings)]
+    if len(levels_present) < PATHS_MIN_LEVELS:
+        return {
+            **base,
+            "has_data": False,
+            "n_postings": len(fam_postings),
+            "levels_present": levels_present,
+            "reason": (
+                f"Only {len(levels_present)} experience level(s) represented "
+                f"({', '.join(levels_present) if levels_present else 'none'}) -- need "
+                f"at least {PATHS_MIN_LEVELS}."
+            ),
+        }
+
+    fam_ids = {p["id"] for p in fam_postings}
+    fam_mentions = [m for m in mentions if m["posting_id"] in fam_ids]
+
+    level_objs: dict[str, dict] = {}
+    for lvl in levels_present:
+        lvl_postings = [p for p in fam_postings if p.get("experience_level") == lvl]
+        lvl_ids = {p["id"] for p in lvl_postings}
+        lvl_mentions = [m for m in fam_mentions if m["posting_id"] in lvl_ids]
+        n_companies = len({_normalize_company_key(p["company"]) for p in lvl_postings if p.get("company")})
+        skill_postings_map = _skill_postings_map(lvl_mentions)
+        skill_companies_map = _skill_company_map(lvl_postings, lvl_mentions)
+
+        skills = []
+        for skill_key, company_set in skill_companies_map.items():
+            spec = taxonomy["skills"].get(skill_key)
+            if spec is None:
+                continue  # stale mention row for a retired skill key, same guard as elsewhere
+            skills.append({
+                "skill": skill_key,
+                "display": spec["display"],
+                "category": spec["category"],
+                "company_count": len(company_set),
+                "posting_count": len(skill_postings_map.get(skill_key, ())),
+            })
+        skills.sort(key=lambda r: (-r["company_count"], -r["posting_count"]))
+
+        level_objs[lvl] = {
+            "level": lvl,
+            "n_postings": len(lvl_postings),
+            "n_companies": n_companies,
+            "skills": skills,
+        }
+
+    # Delta: for each pair of CONSECUTIVELY PRESENT levels (a family missing
+    # "mid" compares junior directly to senior -- honestly labeled with the
+    # real level names, never silently interpolated), skills whose company
+    # share is materially higher at the upper level. >=3 distinct companies
+    # at the higher level is required for a skill to appear at all here.
+    deltas = []
+    for lower, higher in zip(levels_present, levels_present[1:]):
+        lower_obj, higher_obj = level_objs[lower], level_objs[higher]
+        lower_share = {
+            s["skill"]: s["company_count"] / lower_obj["n_companies"]
+            for s in lower_obj["skills"]
+        } if lower_obj["n_companies"] else {}
+
+        rows = []
+        for s in higher_obj["skills"]:
+            if s["company_count"] < PATHS_MIN_SKILL_COMPANIES:
+                continue
+            higher_share = s["company_count"] / higher_obj["n_companies"] if higher_obj["n_companies"] else 0.0
+            lower_share_val = lower_share.get(s["skill"], 0.0)
+            delta = higher_share - lower_share_val
+            if delta <= 0:
+                continue
+            rows.append({
+                "skill": s["skill"],
+                "display": s["display"],
+                "category": s["category"],
+                "company_share_lower": round(lower_share_val, 3),
+                "company_share_higher": round(higher_share, 3),
+                "company_share_delta": round(delta, 3),
+                "company_count_higher": s["company_count"],
+            })
+        rows.sort(key=lambda r: -r["company_share_delta"])
+
+        deltas.append({
+            "from_level": lower,
+            "to_level": higher,
+            "n_lower": {"postings": lower_obj["n_postings"], "companies": lower_obj["n_companies"]},
+            "n_higher": {"postings": higher_obj["n_postings"], "companies": higher_obj["n_companies"]},
+            "skills": rows,
+        })
+
+    return {
+        **base,
+        "has_data": True,
+        "n_postings": len(fam_postings),
+        "levels_present": levels_present,
+        "levels": [level_objs[lvl] for lvl in levels_present],
+        "deltas": deltas,
+    }
+
+
+@cached()
+def _build_all_family_paths() -> dict[str, dict]:
+    """Every family in job_families.yaml, has_data or not -- computed
+    together in one pass so /paths/match doesn't refetch/refilter
+    postings once per family."""
+    families_meta = queries.get_job_families()
+    taxonomy = queries.get_taxonomy_v3()
+    postings = queries.get_postings()
+    mentions = queries.get_skill_mentions()
+    v3_mentions = [m for m in mentions if m.get("extraction_method") == PATHS_EXTRACTION_METHOD]
+
+    postings_by_family: dict[str, list[dict]] = defaultdict(list)
+    for p in postings:
+        fam = p.get("job_family")
+        if fam:
+            postings_by_family[fam].append(p)
+
+    return {
+        meta["key"]: _build_family_path(meta["key"], meta["display"], postings_by_family.get(meta["key"], []), v3_mentions, taxonomy)
+        for meta in families_meta
+    }
+
+
+@app.get("/paths/{family}")
+@cached()
+def paths_for_family(family: str):
+    """Levels, per-level skills (distinct-company counts), and deltas for
+    one job_family. has_data=False + a `reason` naming the unmet
+    threshold when the family doesn't qualify -- see PATHS_MIN_FAMILY_POSTINGS
+    / PATHS_MIN_LEVELS."""
+    families_meta = {f["key"]: f for f in queries.get_job_families()}
+    if family not in families_meta:
+        raise HTTPException(status_code=404, detail=f"Unknown job family '{family}'")
+
+    result = dict(_build_all_family_paths()[family])
+    result["honest_constraint"] = PATHS_HONEST_CONSTRAINT
+    result["min_postings_threshold"] = PATHS_MIN_FAMILY_POSTINGS
+    result["min_levels_threshold"] = PATHS_MIN_LEVELS
+    return result
+
+
+class PathsMatchRequest(BaseModel):
+    skills: list[str]
+
+
+def _better_family_match(a: dict, b: dict) -> bool:
+    """True if candidate a should replace current-best b: higher match
+    fraction wins, then a larger (more specific) signature, then family
+    key for a stable tiebreak."""
+    if a["match_fraction"] != b["match_fraction"]:
+        return a["match_fraction"] > b["match_fraction"]
+    if a["signature_size"] != b["signature_size"]:
+        return a["signature_size"] > b["signature_size"]
+    return a["family"] < b["family"]
+
+
+def _best_family_match(user_skills: set[str], all_paths: dict[str, dict]) -> dict | None:
+    """For every level of every qualifying family, a level's "signature" is
+    the TECHNICAL (non-soft) skills a >=PATHS_MIN_SKILL_COMPANIES distinct
+    companies actually ask for at that level -- soft skills are excluded
+    from the signature for the same reason /coverage excludes them from
+    user_skills: the picker never lets a user select one, so leaving them
+    in would cap the achievable match fraction below 1.0 for no reason. If
+    the user's skills cover >=PATHS_MATCH_THRESHOLD of some signature,
+    that's a strong match -- same bar /coverage uses for a posting.
+    Returns None (not a guess) when nothing clears the bar."""
+    best = None
+    for family_key, path in all_paths.items():
+        if not path.get("has_data"):
+            continue
+        for level_obj in path["levels"]:
+            signature = {
+                s["skill"] for s in level_obj["skills"]
+                if s["company_count"] >= PATHS_MIN_SKILL_COMPANIES and s["category"] != "soft"
+            }
+            if not signature:
+                continue
+            fraction = len(signature & user_skills) / len(signature)
+            if fraction < PATHS_MATCH_THRESHOLD:
+                continue
+            candidate = {
+                "family": family_key,
+                "display": path["display"],
+                "level": level_obj["level"],
+                "match_fraction": round(fraction, 3),
+                "signature_size": len(signature),
+            }
+            if best is None or _better_family_match(candidate, best):
+                best = candidate
+    return best
+
+
+@app.post("/paths/match")
+@cached()
+def paths_match(payload: PathsMatchRequest):
+    """Secondary panel for /analyzer: given the user's selected skills,
+    finds the job_family + experience level they most strongly match into
+    (see _best_family_match), and returns the skills that appear
+    materially more at the NEXT level up that don't at theirs -- i.e. the
+    delta this module already computes for that (level, next level) pair.
+    matched=False (not a weak guess) when no family/level clears the
+    match threshold; next_level=None when the matched level is already
+    the top one this family has data for."""
+    taxonomy = queries.get_taxonomy_v3()
+    # Same soft-skill exclusion as /coverage -- a family/level "signature"
+    # is built from technical skill counts only, so a soft skill in the
+    # input can never itself be matched into.
+    user_skills = {s for s in payload.skills if taxonomy["skills"].get(s, {}).get("category") != "soft"}
+
+    all_paths = _build_all_family_paths()
+    best = _best_family_match(user_skills, all_paths)
+
+    base_response = {
+        "honest_constraint": PATHS_HONEST_CONSTRAINT,
+        "match_threshold": PATHS_MATCH_THRESHOLD,
+    }
+    if best is None:
+        return {
+            **base_response,
+            "matched": False,
+            "family": None,
+            "display": None,
+            "your_level": None,
+            "match_fraction": None,
+            "next_level": None,
+            "next_level_skills": [],
+        }
+
+    path = all_paths[best["family"]]
+    levels_present = path["levels_present"]
+    idx = levels_present.index(best["level"])
+    if idx + 1 < len(levels_present):
+        next_level = levels_present[idx + 1]
+        delta = next(d for d in path["deltas"] if d["from_level"] == best["level"] and d["to_level"] == next_level)
+        next_level_skills = delta["skills"]
+    else:
+        next_level = None
+        next_level_skills = []
+
+    return {
+        **base_response,
+        "matched": True,
+        "family": best["family"],
+        "display": best["display"],
+        "your_level": best["level"],
+        "match_fraction": best["match_fraction"],
+        "next_level": next_level,
+        "next_level_skills": next_level_skills,
+    }
+
+
+# --------------------------------------------------------------------------
 # GET / -- minimal liveness/index, not part of the spec but near-zero cost
 # --------------------------------------------------------------------------
 
@@ -1869,5 +2168,6 @@ def root():
             "/backtest/summary", "/backtest/detail",
             "/insights/live", "/system/health",
             "/curriculum/alignment", "/curriculum/gaps",
+            "/paths/{family}", "/paths/match",
         ],
     }

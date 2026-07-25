@@ -625,3 +625,86 @@ export interface CurriculumGapsResponse {
 export function getCurriculumGaps() {
   return apiFetch<CurriculumGapsResponse>("/curriculum/gaps");
 }
+
+// ---------------------------------------------------------------------------
+// /paths/{family}, /paths/match -- skill adjacency by seniority within a
+// job_family. HONEST CONSTRAINT, carried through every response: job
+// postings never show the same person twice, so career transitions cannot
+// be observed -- this infers what employers ask for at each level, and the
+// delta between levels, not observed career movement.
+// ---------------------------------------------------------------------------
+
+export interface PathSkillEntry {
+  skill: string;
+  display: string;
+  category: string;
+  company_count: number;
+  posting_count: number;
+}
+
+export interface PathLevel {
+  level: string;
+  n_postings: number;
+  n_companies: number;
+  skills: PathSkillEntry[];
+}
+
+export interface PathDeltaSkillEntry {
+  skill: string;
+  display: string;
+  category: string;
+  company_share_lower: number;
+  company_share_higher: number;
+  company_share_delta: number;
+  company_count_higher: number;
+}
+
+export interface PathDelta {
+  from_level: string;
+  to_level: string;
+  n_lower: { postings: number; companies: number };
+  n_higher: { postings: number; companies: number };
+  skills: PathDeltaSkillEntry[];
+}
+
+export interface PathForFamilyResponse {
+  family: string;
+  display: string;
+  has_data: boolean;
+  n_postings: number;
+  levels_present: string[];
+  reason?: string;
+  levels?: PathLevel[];
+  deltas?: PathDelta[];
+  honest_constraint: string;
+  min_postings_threshold: number;
+  min_levels_threshold: number;
+}
+
+export async function getPathsForFamily(family: string): Promise<PathForFamilyResponse> {
+  return apiFetch<PathForFamilyResponse>(`/paths/${encodeURIComponent(family)}`);
+}
+
+export interface PathsMatchResponse {
+  honest_constraint: string;
+  match_threshold: number;
+  matched: boolean;
+  family: string | null;
+  display: string | null;
+  your_level: string | null;
+  match_fraction: number | null;
+  next_level: string | null;
+  next_level_skills: PathDeltaSkillEntry[];
+}
+
+export async function postPathsMatch(skills: string[]): Promise<PathsMatchResponse> {
+  const res = await fetch(`${API_URL}/paths/match`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ skills }),
+  });
+  if (!res.ok) {
+    throw new Error(`Rukhwise API /paths/match failed: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}

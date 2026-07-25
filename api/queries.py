@@ -29,6 +29,7 @@ from cache import cached
 _PROJECT_ROOT = Path(__file__).parent.parent
 _TAXONOMY_PATH = _PROJECT_ROOT / "rukhwise_scraper" / "taxonomy_v1.yaml"
 _TAXONOMY_V3_PATH = _PROJECT_ROOT / "rukhwise_scraper" / "taxonomy_v3.yaml"
+_JOB_FAMILIES_PATH = _PROJECT_ROOT / "rukhwise_scraper" / "job_families.yaml"
 
 load_dotenv(_PROJECT_ROOT / ".env")
 
@@ -37,7 +38,7 @@ _QUERY_PAGE_SIZE = 1000
 POSTING_COLUMNS = (
     "id,source,category,title,company,city,posting_date,experience_raw,"
     "salary_min,salary_max,salary_raw,currency,detail_url,skills_raw,"
-    "first_seen_at,last_seen_at,scrape_run_id,domain"
+    "first_seen_at,last_seen_at,scrape_run_id,domain,job_family,experience_level"
 )
 
 # --- RLS policy SQL -- print via `python queries.py` -----------------------
@@ -182,6 +183,17 @@ def get_curriculum_courses() -> list[dict]:
 def get_curriculum_skill_map() -> list[dict]:
     """Every curriculum_skill_map row (course_id, skill, match_source)."""
     return _fetch_all("curriculum_skill_map", "course_id,skill,match_source")
+
+
+@cached()
+def get_job_families() -> list[dict]:
+    """The controlled job-family vocabulary (key, display, domain,
+    keywords) -- see job_family_classifier.py for the module that
+    actually classifies postings against it. Read directly from the
+    YAML rather than importing that module, same reasoning as
+    get_taxonomy_v3(): this API package stays self-contained."""
+    with open(_JOB_FAMILIES_PATH, encoding="utf-8") as f:
+        return yaml.safe_load(f)["families"]
 
 
 if __name__ == "__main__":

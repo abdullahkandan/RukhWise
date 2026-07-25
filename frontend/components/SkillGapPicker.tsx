@@ -2,7 +2,13 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { postCoverage, type CoverageResponse, type SkillTopEntry } from "@/lib/api";
+import {
+  postCoverage,
+  postPathsMatch,
+  type CoverageResponse,
+  type PathsMatchResponse,
+  type SkillTopEntry,
+} from "@/lib/api";
 import { CATEGORY_LABELS, categoryLabel } from "@/lib/categories";
 
 interface SkillGapPickerProps {
@@ -20,6 +26,7 @@ export function SkillGapPicker({ skills }: SkillGapPickerProps) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<CoverageResponse | null>(null);
+  const [pathsMatch, setPathsMatch] = useState<PathsMatchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -44,14 +51,22 @@ export function SkillGapPicker({ skills }: SkillGapPickerProps) {
       return next;
     });
     setResult(null); // selection changed -- stale results shouldn't linger
+    setPathsMatch(null);
   }
 
   function analyze() {
     setError(null);
     startTransition(async () => {
       try {
-        const res = await postCoverage([...selected]);
+        const skills = [...selected];
+        const res = await postCoverage(skills);
         setResult(res);
+        // Secondary, subordinate to the coverage result above -- a failure
+        // here shouldn't block or error out the main strong-match flow, so
+        // it's a silent best-effort fetch, not part of the try/catch below.
+        postPathsMatch(skills)
+          .then(setPathsMatch)
+          .catch(() => setPathsMatch(null));
       } catch {
         setError("Couldn't analyze right now — try again in a moment.");
       }
@@ -246,6 +261,50 @@ export function SkillGapPicker({ skills }: SkillGapPickerProps) {
                 fully.
               </p>
               <p className="mt-3 font-mono text-xs leading-relaxed text-java/50">{result.note}</p>
+
+              {/* Secondary, subordinate panel -- only appears when the user's
+                  picks map strongly (>=70% of a level's core skills) onto a
+                  job_family/experience_level. Deliberately smaller and set
+                  off by its own divider so it never competes with the
+                  strong-match result above. */}
+              {pathsMatch?.matched && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                  className="mt-10 border-t border-java/10 pt-8"
+                >
+                  <p className="font-mono text-xs uppercase tracking-[0.16em] text-java/40">
+                    Your picks read as {pathsMatch.display} ({pathsMatch.your_level})
+                  </p>
+                  {pathsMatch.next_level ? (
+                    <>
+                      <p className="mt-2 max-w-md font-sans text-sm text-java/60">
+                        At the <strong className="font-medium text-java">{pathsMatch.next_level}</strong> level,
+                        these appear that don&rsquo;t at yours:
+                      </p>
+                      <ul className="mt-4 flex flex-col gap-2">
+                        {pathsMatch.next_level_skills.slice(0, 6).map((s) => (
+                          <li key={s.skill} className="flex items-baseline gap-3">
+                            <span className="font-sans text-sm text-java">{s.display}</span>
+                            <span className="font-mono text-xs tabular-nums text-java/40">
+                              +{Math.round(s.company_share_delta * 100)}pt company share
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="mt-2 max-w-md font-sans text-sm text-java/60">
+                      That&rsquo;s the highest level we have enough data to describe for this family --
+                      no further delta to show.
+                    </p>
+                  )}
+                  <p className="mt-4 font-mono text-xs leading-relaxed text-java/40">
+                    {pathsMatch.honest_constraint}
+                  </p>
+                </motion.div>
+              )}
             </div>
           </motion.div>
         )}
