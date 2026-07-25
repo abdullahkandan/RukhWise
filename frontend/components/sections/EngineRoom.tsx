@@ -9,6 +9,7 @@ import {
   type ForecastsPendingResponse,
   type GradedForecast,
   type PendingForecast,
+  type SystemHealth,
 } from "@/lib/api";
 import { formatPercent, relativeTime } from "@/lib/format";
 import { ScrollReveal } from "../ScrollReveal";
@@ -19,44 +20,54 @@ const FORECASTS_EMPTY_COPY = "First forecasts logged July 18, 2026. First grades
 // The rest of the engine room (system health, curious findings elsewhere on
 // the page) shouldn't go dark just because forecasting data isn't ready --
 // e.g. between this code shipping and the one-time migration/first
-// --predict run. A fetch failure here degrades to the same empty state a
-// genuinely-empty table would show, nothing more drastic.
+// --predict run. lib/api.ts's apiFetch never throws (returns null on
+// failure); these fall back to the same shape a genuinely-empty table
+// would produce, which the existing rendering below already displays
+// honestly ("—", empty sections) -- nothing more drastic needed.
+async function safeGetSystemHealth(): Promise<SystemHealth> {
+  return (
+    (await getSystemHealth()) ?? {
+      last_successful_run_per_source: {},
+      postings_added_24h: 0,
+      postings_added_7d: 0,
+      enrichment_coverage_mustakbil: null,
+      extraction_coverage: null,
+      data_freshness_hours: null,
+      table_sizes: {},
+      checked_at: "",
+    }
+  );
+}
+
 async function safeGetForecastsPending(): Promise<ForecastsPendingResponse> {
-  try {
-    return await getForecastsPending();
-  } catch {
-    return { count: 0, forecasts: [] };
-  }
+  return (await getForecastsPending()) ?? { count: 0, forecasts: [] };
 }
 
 async function safeGetForecastsAccuracy(): Promise<ForecastsAccuracyResponse> {
-  try {
-    return await getForecastsAccuracy();
-  } catch {
-    return {
+  return (
+    (await getForecastsAccuracy()) ?? {
       forecasts: [],
       summary: {
         count_graded: 0,
         mae_overall: null,
         beat_baseline_rate_overall: null,
         beat_baseline_rate_by_type: {},
+        outcome_counts_overall: { beat: 0, tie: 0, lost: 0 },
       },
-    };
-  }
+    }
+  );
 }
 
 async function safeGetBacktestSummary(): Promise<BacktestSummaryResponse> {
-  try {
-    return await getBacktestSummary();
-  } catch {
-    return {
+  return (
+    (await getBacktestSummary()) ?? {
       n_weeks: 0,
       n_rows: 0,
       source_scope: null,
       overall: { n: 0, beat: 0, tie: 0, lost: 0, beat_rate: null, mae: null },
       by_target: [],
-    };
-  }
+    }
+  );
 }
 
 function CoverageBar({ label, value }: { label: string; value: number | null }) {
@@ -114,8 +125,16 @@ function GradedRow({ forecast, index }: { forecast: GradedForecast; index: numbe
       <p className="font-mono text-xs tabular-nums text-java">
         <span className="text-java/35">actual </span>{forecast.actual.toFixed(1)}
       </p>
-      <p className={`font-mono text-xs ${forecast.beat_baseline ? "text-sceptre-bright" : "text-java/35"}`}>
-        {forecast.beat_baseline ? "beat baseline" : "did not beat baseline"}
+      <p
+        className={`font-mono text-xs ${
+          forecast.outcome === "beat"
+            ? "text-sceptre-bright"
+            : forecast.outcome === "tie"
+              ? "text-java/50"
+              : "text-java/35"
+        }`}
+      >
+        {forecast.outcome === "beat" ? "beat baseline" : forecast.outcome === "tie" ? "tied baseline" : "lost to baseline"}
       </p>
       <p className="font-mono text-xs text-java/40">
         <span className="text-java/35">scope </span>{formatSourceScope(forecast.source_scope)}
@@ -153,13 +172,14 @@ function BacktestTargetRow({ target, index }: { target: BacktestTargetSummary; i
 
 export async function EngineRoom() {
   const [health, pending, accuracy, backtest] = await Promise.all([
-    getSystemHealth(),
+    safeGetSystemHealth(),
     safeGetForecastsPending(),
     safeGetForecastsAccuracy(),
     safeGetBacktestSummary(),
   ]);
   const sources = Object.entries(health.last_successful_run_per_source);
-  const beatRate = accuracy.summary.beat_baseline_rate_overall;
+  const outcomeCounts = accuracy.summary.outcome_counts_overall;
+  const totalGraded = accuracy.summary.count_graded;
 
   return (
     <div className="py-24 md:py-32">
@@ -277,12 +297,18 @@ export async function EngineRoom() {
                 How the predictions held up
               </h3>
             </div>
-            {beatRate !== null && (
+            {totalGraded > 0 && (
               <div className="text-right">
-                <p className="font-mono text-4xl font-semibold tabular-nums text-sceptre-bright">
-                  {formatPercent(beatRate)}
+                <p className="font-mono text-2xl font-semibold tabular-nums">
+                  <span className="text-sceptre-bright">beat {outcomeCounts.beat}</span>
+                  <span className="text-java/30">, </span>
+                  <span className="text-java/60">tied {outcomeCounts.tie}</span>
+                  <span className="text-java/30">, </span>
+                  <span className="text-java/35">lost {outcomeCounts.lost}</span>
                 </p>
-                <p className="font-mono text-xs uppercase tracking-widest text-java/50">beat baseline</p>
+                <p className="font-mono text-xs uppercase tracking-widest text-java/50">
+                  of {totalGraded} graded
+                </p>
               </div>
             )}
           </div>

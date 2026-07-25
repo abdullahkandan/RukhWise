@@ -96,19 +96,20 @@ export function MarketSkillsPanel({
   // filter), so it re-fetches the two datasets it governs together.
   useEffect(() => {
     startTransition(async () => {
-      try {
-        const [freshSkills, freshCooc] = await Promise.all([
-          getSkillsTop({ includeSoft: true, excludeBulk, limit: 100 }),
-          getSkillsCooccurrence({ excludeBulk, limit: 5 }),
-        ]);
+      // apiFetch never throws -- a failed fetch returns null, checked
+      // explicitly below. Keep the last good data rather than a broken
+      // panel on a transient failure.
+      const [freshSkills, freshCooc] = await Promise.all([
+        getSkillsTop({ includeSoft: true, excludeBulk, limit: 100 }),
+        getSkillsCooccurrence({ excludeBulk, limit: 5 }),
+      ]);
+      if (freshSkills) {
         setSkills(freshSkills.skills);
         setTotalPostings(freshSkills.total_postings);
-        setCooccurrence(freshCooc.pairs);
-        const freshCompanions = await getSkillCompanions(bundleSkill, { excludeBulk });
-        setCompanions(freshCompanions);
-      } catch {
-        // Keep the last good data rather than a broken panel.
       }
+      if (freshCooc) setCooccurrence(freshCooc.pairs);
+      const freshCompanions = await getSkillCompanions(bundleSkill, { excludeBulk });
+      if (freshCompanions) setCompanions(freshCompanions);
     });
     // bundleSkill intentionally excluded -- handled by its own effect below,
     // this one only fires on the exclude_bulk toggle itself.
@@ -118,12 +119,9 @@ export function MarketSkillsPanel({
   function handleBundleSkillChange(value: string) {
     setBundleSkill(value);
     startBundleTransition(async () => {
-      try {
-        const fresh = await getSkillCompanions(value, { excludeBulk });
-        setCompanions(fresh);
-      } catch {
-        // Keep last good data.
-      }
+      const fresh = await getSkillCompanions(value, { excludeBulk });
+      if (fresh) setCompanions(fresh);
+      // else: keep last good data.
     });
   }
 

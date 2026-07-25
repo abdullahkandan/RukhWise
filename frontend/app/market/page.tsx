@@ -5,6 +5,7 @@ import { MarketSkillsPanel } from "@/components/MarketSkillsPanel";
 import { SkillCompare } from "@/components/SkillCompare";
 import { GeographyMoney } from "@/components/sections/GeographyMoney";
 import { ScrollReveal } from "@/components/ScrollReveal";
+import { DataUnavailable } from "@/components/DataUnavailable";
 import {
   getSkillCompanions,
   getSkillsCompare,
@@ -25,6 +26,19 @@ export default async function MarketPage() {
     getSkillsCooccurrence({ limit: 5 }),
   ]);
 
+  if (!stats || !skillsAll || !cooccurrence) {
+    return (
+      <main>
+        <Section register="java">
+          <div className="py-24 md:py-32">
+            <DataUnavailable message="Market data is temporarily unavailable." />
+          </div>
+        </Section>
+        <Footer />
+      </main>
+    );
+  }
+
   const technical = skillsAll.skills.filter((s) => s.category !== "soft");
   const defaultBundleSkill = technical.find((s) => s.skill === "sql")?.skill ?? technical[0]?.skill ?? "sql";
   const defaultA = defaultBundleSkill;
@@ -34,6 +48,19 @@ export default async function MarketPage() {
     getSkillCompanions(defaultBundleSkill),
     getSkillsCompare(defaultA, defaultB),
   ]);
+
+  if (!companions || !compareData) {
+    return (
+      <main>
+        <Section register="java">
+          <div className="py-24 md:py-32">
+            <DataUnavailable message="Market data is temporarily unavailable." />
+          </div>
+        </Section>
+        <Footer />
+      </main>
+    );
+  }
 
   return (
     <main>

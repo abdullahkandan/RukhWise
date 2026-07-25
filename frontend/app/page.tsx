@@ -4,6 +4,7 @@ import { Hero } from "@/components/sections/Hero";
 import { FlowField } from "@/components/FlowField";
 import { InsightStrip } from "@/components/sections/InsightStrip";
 import { DoorwayPanel } from "@/components/DoorwayPanel";
+import { DataUnavailable } from "@/components/DataUnavailable";
 import { isResearcherInsight } from "@/lib/insights";
 import { getInsightsLive, getSkillsTop, getStatsOverview, getSystemHealth } from "@/lib/api";
 
@@ -15,9 +16,25 @@ export default async function HomePage() {
     getInsightsLive(),
   ]);
 
+  if (!stats || !skillsAll || !health) {
+    return (
+      <main>
+        <Section register="cream">
+          <div className="py-24 md:py-32">
+            <DataUnavailable message="The live market feed is temporarily unavailable." />
+          </div>
+        </Section>
+        <Footer />
+      </main>
+    );
+  }
+
   // Home is the teaser -- the researcher-flavored findings (templated-share,
   // foreign-currency) live on /engine's "Findings for the curious" instead.
-  const generalInsights = insights.insights.filter((i) => !isResearcherInsight(i)).slice(0, 4);
+  // insights degrades gracefully (empty strip) rather than failing the
+  // whole page -- it's a nice-to-have here, not load-bearing like Hero's
+  // numbers above.
+  const generalInsights = insights ? insights.insights.filter((i) => !isResearcherInsight(i)).slice(0, 4) : [];
 
   const technical = skillsAll.skills.filter((s) => s.category !== "soft");
   const topSkill = technical[0];

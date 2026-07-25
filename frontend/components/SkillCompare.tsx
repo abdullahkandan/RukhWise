@@ -88,12 +88,10 @@ export function SkillCompare({ skills, initialData, initialA, initialB }: SkillC
     setSkillA(a);
     setSkillB(b);
     startTransition(async () => {
-      try {
-        const fresh = await getSkillsCompare(a, b);
-        setData(fresh);
-      } catch {
-        // Keep showing the last good data rather than a broken chart.
-      }
+      // apiFetch never throws -- null means keep showing the last good
+      // data rather than a broken chart.
+      const fresh = await getSkillsCompare(a, b);
+      if (fresh) setData(fresh);
     });
   }
 

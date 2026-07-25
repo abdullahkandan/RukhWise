@@ -1,5 +1,6 @@
 import { GeographyPanels } from "../GeographyPanels";
 import { ScrollReveal } from "../ScrollReveal";
+import { DataUnavailable } from "../DataUnavailable";
 import { getCitiesBreakdown, getInsightsLive, getSalariesSummary, type SkillTopEntry } from "@/lib/api";
 
 interface GeographyMoneyProps {
@@ -13,7 +14,17 @@ export async function GeographyMoney({ skills }: GeographyMoneyProps) {
     getInsightsLive(),
   ]);
 
-  const foreignCurrencyInsight = insights.insights.find(
+  if (!cities || !salaries) {
+    return (
+      <div className="py-24 md:py-32">
+        <DataUnavailable message="Geography and salary data are temporarily unavailable." />
+      </div>
+    );
+  }
+
+  // insights degrades gracefully -- it only feeds the foreign-currency
+  // count annotation, not load-bearing for either panel below.
+  const foreignCurrencyInsight = insights?.insights.find(
     (i) => typeof i.value.by_currency === "object" && i.value.by_currency !== null
   );
   const foreignCurrencyCount = (foreignCurrencyInsight?.value.count as number) ?? 0;

@@ -1520,15 +1520,30 @@ def forecasts_pending():
     return {"count": len(rows), "forecasts": rows}
 
 
+def _forecast_outcome(abs_error: float, baseline_abs_error: float) -> str:
+    """beat/tie/lost, derived here purely from the two error columns
+    already on every graded forecast row -- no schema change. The stored
+    beat_baseline is a boolean (abs_error < baseline_abs_error) that
+    collapses a tie into "not beat": a short-history forecast that comes
+    out EQUAL to the baseline (common early on, by construction, when
+    there isn't yet enough signal to diverge from it) would read as a
+    loss under that boolean alone. This is the honest three-way split."""
+    if abs_error < baseline_abs_error:
+        return "beat"
+    if abs_error > baseline_abs_error:
+        return "lost"
+    return "tie"
+
+
 @app.get("/forecasts/accuracy")
 @cached()
 def forecasts_accuracy():
     """Every graded forecast, plus a summary: overall MAE, beat-baseline
-    rate overall and by target_type, and the graded count. MAPE is
-    deliberately not in the summary (a handful of low-count skill targets
-    would make it wildly noisy) -- per-row pct_error is still included
-    for rows where actual > 0, so the detail is there without the
-    misleading headline aggregate."""
+    rate overall and by target_type, the three-way beat/tie/lost outcome
+    count, and the graded count. MAPE is deliberately not in the summary
+    (a handful of low-count skill targets would make it wildly noisy) --
+    per-row pct_error is still included for rows where actual > 0, so the
+    detail is there without the misleading headline aggregate."""
     taxonomy = queries.get_taxonomy()
     forecasts = queries.get_forecasts()
     graded = [f for f in forecasts if f.get("graded_at") is not None]
@@ -1550,6 +1565,7 @@ def forecasts_accuracy():
             "abs_error": f["abs_error"],
             "baseline_abs_error": f["baseline_abs_error"],
             "beat_baseline": f["beat_baseline"],
+            "outcome": _forecast_outcome(f["abs_error"], f["baseline_abs_error"]),
             "pct_error": pct_error,
             "graded_at": f["graded_at"],
             "source_scope": f.get("source_scope"),
@@ -1569,6 +1585,12 @@ def forecasts_accuracy():
         for t, fs in by_type.items()
     }
 
+    outcome_counts_overall = {
+        "beat": sum(1 for r in rows if r["outcome"] == "beat"),
+        "tie": sum(1 for r in rows if r["outcome"] == "tie"),
+        "lost": sum(1 for r in rows if r["outcome"] == "lost"),
+    }
+
     return {
         "forecasts": rows,
         "summary": {
@@ -1576,6 +1598,7 @@ def forecasts_accuracy():
             "mae_overall": mae_overall,
             "beat_baseline_rate_overall": beat_overall,
             "beat_baseline_rate_by_type": beat_by_type,
+            "outcome_counts_overall": outcome_counts_overall,
         },
     }
 

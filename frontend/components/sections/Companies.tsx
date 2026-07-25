@@ -1,13 +1,19 @@
 import { getCompaniesTop } from "@/lib/api";
 import { formatPKR } from "@/lib/format";
 import { ScrollReveal } from "../ScrollReveal";
+import { DataUnavailable } from "../DataUnavailable";
 
 interface CompaniesProps {
   totalPostings: number;
 }
 
 export async function Companies({ totalPostings }: CompaniesProps) {
-  const { companies } = await getCompaniesTop({ limit: 10 });
+  const data = await getCompaniesTop({ limit: 10 });
+
+  if (!data) {
+    return <DataUnavailable message="Company rankings are temporarily unavailable." />;
+  }
+  const { companies } = data;
 
   return (
     <div className="py-24 md:py-32">

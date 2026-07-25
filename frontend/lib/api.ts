@@ -9,14 +9,30 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const REVALIDATE_SECONDS = 600;
 
-async function apiFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    next: { revalidate: REVALIDATE_SECONDS },
-  });
-  if (!res.ok) {
-    throw new Error(`Rukhwise API ${path} failed: ${res.status} ${res.statusText}`);
+/**
+ * Returns null (never throws) on any failure -- network error, timeout, or
+ * a non-2xx response. This runs at BUILD time for every page that fetches
+ * server-side (ISR prerendering), so a stale or momentarily-down API must
+ * never take the whole Vercel build down with it (see e.g. the
+ * /curriculum/alignment 404 that did exactly that). Every caller must
+ * handle a null result -- an honest "temporarily unavailable" empty state,
+ * never fabricated zeros. Errors are still logged so a real outage is
+ * visible in build/server logs, just not fatal to them.
+ */
+async function apiFetch<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      next: { revalidate: REVALIDATE_SECONDS },
+    });
+    if (!res.ok) {
+      console.error(`Rukhwise API ${path} failed: ${res.status} ${res.statusText}`);
+      return null;
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    console.error(`Rukhwise API ${path} failed:`, err);
+    return null;
   }
-  return res.json();
 }
 
 // ---------------------------------------------------------------------------
@@ -492,9 +508,19 @@ export interface GradedForecast {
   abs_error: number;
   baseline_abs_error: number;
   beat_baseline: boolean;
+  /** Derived server-side from abs_error vs baseline_abs_error -- the
+   * honest three-way split. beat_baseline (boolean, above) collapses a
+   * tie into "false", which reads as a loss; use this field for display. */
+  outcome: "beat" | "tie" | "lost";
   pct_error: number | null;
   graded_at: string;
   source_scope: string | null;
+}
+
+export interface ForecastOutcomeCounts {
+  beat: number;
+  tie: number;
+  lost: number;
 }
 
 export interface ForecastsAccuracySummary {
@@ -502,6 +528,7 @@ export interface ForecastsAccuracySummary {
   mae_overall: number | null;
   beat_baseline_rate_overall: number | null;
   beat_baseline_rate_by_type: Record<string, number>;
+  outcome_counts_overall: ForecastOutcomeCounts;
 }
 
 export interface ForecastsAccuracyResponse {
@@ -682,7 +709,7 @@ export interface PathForFamilyResponse {
   min_levels_threshold: number;
 }
 
-export async function getPathsForFamily(family: string): Promise<PathForFamilyResponse> {
+export async function getPathsForFamily(family: string): Promise<PathForFamilyResponse | null> {
   return apiFetch<PathForFamilyResponse>(`/paths/${encodeURIComponent(family)}`);
 }
 

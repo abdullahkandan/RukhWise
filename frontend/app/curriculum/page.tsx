@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Section } from "@/components/Section";
 import { Footer } from "@/components/Footer";
 import { CountUp } from "@/components/CountUp";
+import { DataUnavailable } from "@/components/DataUnavailable";
 import { getCurriculumAlignment } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 
@@ -61,6 +62,21 @@ function SkillRow({
 
 export default async function CurriculumPage() {
   const data = await getCurriculumAlignment();
+
+  if (!data) {
+    return (
+      <main>
+        <Section register="cream" className="pt-36 pb-20 md:pt-44 md:pb-24">
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-java/50">Curriculum Alignment</p>
+          <h1 className="mt-3 max-w-2xl font-display text-4xl font-medium leading-tight md:text-5xl">
+            What&rsquo;s taught, what&rsquo;s hired
+          </h1>
+          <DataUnavailable message="The curriculum alignment index is temporarily unavailable." />
+        </Section>
+        <Footer />
+      </main>
+    );
+  }
 
   const domainLabel = data.market_domains.map((d) => d.replace(/_/g, " ")).join(" + ");
 

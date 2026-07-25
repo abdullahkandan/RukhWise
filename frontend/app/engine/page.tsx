@@ -17,7 +17,11 @@ export default async function EnginePage() {
     getPostingsForeignCurrency(),
   ]);
 
-  const curiousInsights = insights.insights.filter(isResearcherInsight);
+  // Both degrade gracefully rather than failing the page -- EngineRoom
+  // below (system health, forecasts, backtest) is the load-bearing content
+  // here; "Findings for the curious" is a nice-to-have that simply doesn't
+  // render if either fetch comes back null.
+  const curiousInsights = insights ? insights.insights.filter(isResearcherInsight) : [];
 
   return (
     <main>
@@ -29,7 +33,7 @@ export default async function EnginePage() {
         <Section register="java">
           <InsightStrip
             insights={curiousInsights}
-            foreignCurrencyBreakout={foreignCurrency.breakout_stack}
+            foreignCurrencyBreakout={foreignCurrency?.breakout_stack}
             eyebrow="Findings for the curious"
             heading="What the data reveals about itself"
           />

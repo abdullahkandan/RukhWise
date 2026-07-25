@@ -230,7 +230,7 @@ export default function MethodologyPage() {
                   assumption. Measured before and after: the share of postings with one or
                   zero substantive skill matches fell from 75% to 19% in healthcare, 36% to
                   9% in logistics and supply chain, and 84% to 52% in trades. Admin/clerical
-                  work improved too (71% to 57%) but remains the highest of any domain
+                  work improved too (71% to 63%) but remains the highest of any domain
                   measured — not because the taxonomy is blind to it, but because
                   administrative and customer-support postings in this market
                   overwhelmingly describe workplace qualities (attention to detail,

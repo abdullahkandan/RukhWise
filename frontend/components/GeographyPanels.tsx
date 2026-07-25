@@ -46,16 +46,15 @@ export function GeographyPanels({
   function handleChange(value: string) {
     setSkill(value);
     startTransition(async () => {
-      try {
-        const [freshCities, freshSalaries] = await Promise.all([
-          getCitiesBreakdown(value || undefined),
-          getSalariesSummary("PKR", value || undefined),
-        ]);
-        setCities(freshCities);
-        setSalaries(freshSalaries);
-      } catch {
-        // Keep last good data rather than blanking both panels.
-      }
+      // apiFetch never throws -- a failed fetch returns null, checked
+      // explicitly below. Keep last good data rather than blanking both
+      // panels on a transient failure.
+      const [freshCities, freshSalaries] = await Promise.all([
+        getCitiesBreakdown(value || undefined),
+        getSalariesSummary("PKR", value || undefined),
+      ]);
+      if (freshCities) setCities(freshCities);
+      if (freshSalaries) setSalaries(freshSalaries);
     });
   }
 

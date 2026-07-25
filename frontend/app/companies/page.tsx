@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Section } from "@/components/Section";
 import { Footer } from "@/components/Footer";
 import { Companies } from "@/components/sections/Companies";
+import { DataUnavailable } from "@/components/DataUnavailable";
 import { getStatsOverview } from "@/lib/api";
 
 export const metadata: Metadata = {
@@ -15,7 +16,11 @@ export default async function CompaniesPage() {
   return (
     <main>
       <Section register="java">
-        <Companies totalPostings={stats.total_postings} />
+        {stats ? (
+          <Companies totalPostings={stats.total_postings} />
+        ) : (
+          <DataUnavailable message="Company data is temporarily unavailable." />
+        )}
       </Section>
       <Footer />
     </main>

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Section } from "@/components/Section";
 import { Footer } from "@/components/Footer";
 import { SkillGapAnalyzerSection } from "@/components/sections/SkillGapAnalyzer";
+import { DataUnavailable } from "@/components/DataUnavailable";
 import { getSkillsTop } from "@/lib/api";
 
 export const metadata: Metadata = {
@@ -15,7 +16,11 @@ export default async function AnalyzerPage() {
   return (
     <main>
       <Section register="cream">
-        <SkillGapAnalyzerSection skills={skillsAll.skills} />
+        {skillsAll ? (
+          <SkillGapAnalyzerSection skills={skillsAll.skills} />
+        ) : (
+          <DataUnavailable message="The skill list is temporarily unavailable." />
+        )}
       </Section>
       <Footer />
     </main>
