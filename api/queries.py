@@ -63,6 +63,7 @@ alter table forecasts enable row level security;
 alter table backtests enable row level security;
 alter table curriculum_courses enable row level security;
 alter table curriculum_skill_map enable row level security;
+alter table briefings enable row level security;
 
 drop policy if exists "public read" on postings;
 create policy "public read" on postings for select using (true);
@@ -81,6 +82,9 @@ create policy "public read" on curriculum_courses for select using (true);
 
 drop policy if exists "public read" on curriculum_skill_map;
 create policy "public read" on curriculum_skill_map for select using (true);
+
+drop policy if exists "public read" on briefings;
+create policy "public read" on briefings for select using (true);
 """
 
 
@@ -183,6 +187,19 @@ def get_curriculum_courses() -> list[dict]:
 def get_curriculum_skill_map() -> list[dict]:
     """Every curriculum_skill_map row (course_id, skill, match_source)."""
     return _fetch_all("curriculum_skill_map", "course_id,skill,match_source")
+
+
+BRIEFING_COLUMNS = "id,week_start,created_at,body,source,facts_json,model_version,blocked_reason"
+
+
+@cached()
+def get_briefings() -> list[dict]:
+    """Every briefings row -- written only by briefing.py (service-role
+    key), immutable once inserted (see that table's trigger). Small,
+    append-only, one row per week -- no pagination concerns in practice,
+    but _fetch_all is used anyway for consistency with every other
+    fetcher here."""
+    return _fetch_all("briefings", BRIEFING_COLUMNS)
 
 
 @cached()

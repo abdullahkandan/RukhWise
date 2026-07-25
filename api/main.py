@@ -2203,6 +2203,52 @@ def paths_match(payload: PathsMatchRequest):
 
 
 # --------------------------------------------------------------------------
+# GET /briefings/latest, GET /briefings -- the fully-automated weekly
+# briefing (briefing.py). Every row is either source='llm' (drafted by
+# Groq from a facts dict, then verified by briefing.py's assertion layer
+# before publication) or source='template' (that layer blocked the draft,
+# or Groq wasn't reachable at all -- a plain briefing built directly from
+# the same facts dict instead). This API never distinguishes the two in
+# terms of trustworthiness -- both are published only because every
+# number and name in them is already independently verifiable via
+# facts_json -- but blocked_reason is exposed for anyone who wants to see
+# exactly why a given week fell back.
+# --------------------------------------------------------------------------
+
+BRIEFING_SUMMARY_FIELDS = ("id", "week_start", "created_at", "body", "source", "model_version", "blocked_reason")
+
+
+def _briefing_summary(row: dict) -> dict:
+    return {k: row.get(k) for k in BRIEFING_SUMMARY_FIELDS}
+
+
+@app.get("/briefings/latest")
+@cached()
+def briefings_latest():
+    """The most recently published briefing (by week_start), or
+    has_briefing=False if none have been published yet -- an honest empty
+    state, not a 404, since "no briefing yet" is an expected, normal
+    condition (e.g. before the first Monday run)."""
+    briefings = queries.get_briefings()
+    if not briefings:
+        return {"has_briefing": False}
+    latest = max(briefings, key=lambda r: r["week_start"])
+    return {"has_briefing": True, **_briefing_summary(latest)}
+
+
+@app.get("/briefings")
+@cached()
+def briefings_list(limit: int = Query(default=12, ge=1, le=52)):
+    """Every published briefing, most recent week first, summary fields
+    only (facts_json omitted here -- it can be sizeable; fetch
+    /briefings/latest or a future /briefings/{week} for the full record
+    if that's ever needed)."""
+    briefings = sorted(queries.get_briefings(), key=lambda r: r["week_start"], reverse=True)
+    rows = [_briefing_summary(r) for r in briefings[:limit]]
+    return {"count": len(rows), "briefings": rows}
+
+
+# --------------------------------------------------------------------------
 # GET / -- minimal liveness/index, not part of the spec but near-zero cost
 # --------------------------------------------------------------------------
 
@@ -2221,5 +2267,6 @@ def root():
             "/insights/live", "/system/health",
             "/curriculum/alignment", "/curriculum/gaps",
             "/paths/{family}", "/paths/match",
+            "/briefings/latest", "/briefings",
         ],
     }

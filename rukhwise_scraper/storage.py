@@ -1098,6 +1098,46 @@ def insert_forecasts(rows: list[dict]) -> dict:
     return {"inserted": inserted, "skipped": skipped, "failed": failed, "inserted_rows": inserted_rows}
 
 
+def get_graded_forecasts() -> list[dict]:
+    """Every forecasts row that has been graded (graded_at not null) --
+    briefing.py's input for "running totals across all graded weeks".
+    Unlike get_ungraded_forecasts(), not scoped to one week."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("forecasts")
+            .select("target_type,target_key,target_week_start,predicted,baseline_predicted,"
+                    "actual,abs_error,baseline_abs_error,beat_baseline,graded_at,model_version")
+            .not_.is_("graded_at", "null")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def get_forecasts_for_week(target_week_start: str) -> list[dict]:
+    """Every forecasts row for one target week, graded or not -- used by
+    briefing.py both for "last week's graded forecasts" (target_week_start
+    = the week just graded) and "this week's newly logged predictions"
+    (target_week_start = next week)."""
+    client = _get_client()
+    res = (
+        client.table("forecasts")
+        .select("target_type,target_key,target_week_start,predicted,baseline_predicted,"
+                "actual,abs_error,baseline_abs_error,beat_baseline,graded_at,model_version")
+        .eq("target_week_start", target_week_start)
+        .execute()
+    )
+    return res.data or []
+
+
 def get_ungraded_forecasts(target_week_start: str) -> list[dict]:
     """Every forecasts row for one target week (ISO date string) still
     awaiting grading (graded_at is null) -- the --grade step's input.
@@ -1329,6 +1369,109 @@ def get_curriculum_skill_map() -> list[dict]:
             break
         offset += _QUERY_PAGE_SIZE
     return rows
+
+
+# --------------------------------------------------------------------------
+# Weekly briefing (briefing.py) -- a fully-automated, fact-gated narrative
+# published once per graded week. Same append-only, immutable-once-written
+# pattern as forecasts (see BRIEFINGS_TABLE_SQL's trigger): a briefing row
+# is never edited or deleted after insert, only ever added to. Unlike
+# forecasts, there's no follow-up write at all (no grading step), so the
+# trigger here rejects every update/delete unconditionally -- simpler than
+# forecasts' trigger, which had to carve out exactly one allowed grading
+# update.
+# --------------------------------------------------------------------------
+
+BRIEFINGS_TABLE_SQL = """\
+create table if not exists briefings (
+    id uuid primary key default gen_random_uuid(),
+    week_start date not null,
+    created_at timestamptz not null default now(),
+    body text not null,
+    source text not null check (source in ('llm', 'template')),
+    facts_json jsonb not null,
+    model_version text,
+    blocked_reason text,
+    unique (week_start)
+);
+
+create or replace function reject_briefings_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+    raise exception 'briefings rows are immutable -- % is not allowed (id=%)',
+        TG_OP, coalesce(old.id, new.id);
+end;
+$$;
+
+drop trigger if exists briefings_immutable on briefings;
+create trigger briefings_immutable
+before update or delete on briefings
+for each row
+execute function reject_briefings_mutation();
+"""
+
+
+def get_skill_mentions_for_briefing() -> list[dict]:
+    """posting_id, skill, extraction_method for every skill_mentions row --
+    briefing.py filters to its own taxonomy-version constant client-side
+    (same reasoning as curriculum.py/paths not importing api/'s
+    ACTIVE_TAXONOMY: each standalone script owns its own scoping)."""
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("skill_mentions")
+            .select("posting_id,skill,extraction_method")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def get_briefing_for_week(week_start: str) -> dict | None:
+    """The briefings row for one week (ISO date string), if one has
+    already been published -- briefing.py's idempotency check, so a
+    workflow retry never attempts a second LLM call or insert for a week
+    already done."""
+    client = _get_client()
+    res = client.table("briefings").select("id,week_start,source").eq("week_start", week_start).execute()
+    rows = res.data or []
+    return rows[0] if rows else None
+
+
+def insert_briefing(row: dict) -> dict:
+    """Insert exactly one briefings row -- briefing.py always writes at
+    most one per run. Upsert-safe via the table's unique(week_start), same
+    ignore_duplicates convention as insert_forecasts: a second same-week
+    attempt (workflow retry) is silently skipped rather than erroring,
+    since the immutability trigger would reject an overwrite anyway.
+    row needs: week_start, body, source, facts_json, model_version
+    (nullable), blocked_reason (nullable). Returns
+    {"inserted": bool, "row": dict | None}."""
+    client = _get_client()
+    try:
+        result = (
+            client.table("briefings")
+            .upsert([row], on_conflict="week_start", ignore_duplicates=True)
+            .execute()
+        )
+        returned = result.data or []
+        if returned:
+            logger.info(f"insert_briefing: published week_start={row['week_start']} source={row['source']}")
+            return {"inserted": True, "row": returned[0]}
+        logger.info(f"insert_briefing: week_start={row['week_start']} already published, skipped")
+        return {"inserted": False, "row": None}
+    except Exception as exc:
+        logger.error(f"Failed to insert briefing for week_start={row.get('week_start')}: {exc}")
+        return {"inserted": False, "row": None}
 
 
 if __name__ == "__main__":

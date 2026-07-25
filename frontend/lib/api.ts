@@ -736,3 +736,47 @@ export async function postPathsMatch(skills: string[]): Promise<PathsMatchRespon
   }
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// /briefings/latest, /briefings -- the fully-automated weekly briefing
+// (briefing.py). source is 'llm' (drafted by Groq, then machine-verified
+// against its own facts before publication) or 'template' (the verifier
+// blocked the draft, or Groq wasn't reachable -- a plain briefing built
+// directly from the same facts instead). Both are equally true; neither is
+// a "degraded" version of the other.
+// ---------------------------------------------------------------------------
+
+export interface BriefingSummary {
+  id: string;
+  week_start: string;
+  created_at: string;
+  body: string;
+  source: "llm" | "template";
+  model_version: string | null;
+  blocked_reason: string | null;
+}
+
+export interface BriefingsLatestResponse {
+  has_briefing: boolean;
+  id?: string;
+  week_start?: string;
+  created_at?: string;
+  body?: string;
+  source?: "llm" | "template";
+  model_version?: string | null;
+  blocked_reason?: string | null;
+}
+
+export async function getBriefingsLatest(): Promise<BriefingsLatestResponse | null> {
+  return apiFetch<BriefingsLatestResponse>("/briefings/latest");
+}
+
+export interface BriefingsListResponse {
+  count: number;
+  briefings: BriefingSummary[];
+}
+
+export async function getBriefings(limit?: number): Promise<BriefingsListResponse | null> {
+  const query = limit ? `?limit=${limit}` : "";
+  return apiFetch<BriefingsListResponse>(`/briefings${query}`);
+}

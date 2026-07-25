@@ -1,10 +1,12 @@
 import {
   getBacktestSummary,
+  getBriefingsLatest,
   getForecastsAccuracy,
   getForecastsPending,
   getSystemHealth,
   type BacktestSummaryResponse,
   type BacktestTargetSummary,
+  type BriefingsLatestResponse,
   type ForecastsAccuracyResponse,
   type ForecastsPendingResponse,
   type GradedForecast,
@@ -68,6 +70,10 @@ async function safeGetBacktestSummary(): Promise<BacktestSummaryResponse> {
       by_target: [],
     }
   );
+}
+
+async function safeGetBriefingsLatest(): Promise<BriefingsLatestResponse> {
+  return (await getBriefingsLatest()) ?? { has_briefing: false };
 }
 
 function CoverageBar({ label, value }: { label: string; value: number | null }) {
@@ -143,6 +149,47 @@ function GradedRow({ forecast, index }: { forecast: GradedForecast; index: numbe
   );
 }
 
+function BriefingPanel({ briefing, index }: { briefing: BriefingsLatestResponse; index: number }) {
+  return (
+    <ScrollReveal
+      index={index}
+      staggerMs={70}
+      className="border border-java/15 bg-cream px-6 py-6 md:px-10 md:py-8"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+        <div>
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-java/50">Weekly briefing</p>
+          {briefing.has_briefing && (
+            <h3 className="mt-3 max-w-xl font-display text-lg font-medium leading-relaxed md:text-xl">
+              Week of {briefing.week_start}
+            </h3>
+          )}
+        </div>
+        {briefing.has_briefing && (
+          <p className="font-mono text-xs uppercase tracking-widest text-java/40">
+            {briefing.source === "llm" ? "drafted by model" : "template fallback"}
+          </p>
+        )}
+      </div>
+
+      {briefing.has_briefing ? (
+        <>
+          <p className="mt-5 max-w-2xl font-sans text-[15px] leading-relaxed text-java/85">
+            {briefing.body}
+          </p>
+          <p className="mt-6 font-sans text-xs text-java/45">
+            Generated from computed facts and machine-verified before publication -- the model
+            never computes or predicts, and every number and name above traces back to the
+            underlying data.
+          </p>
+        </>
+      ) : (
+        <p className="mt-4 font-sans text-sm text-java/60">{FORECASTS_EMPTY_COPY}</p>
+      )}
+    </ScrollReveal>
+  );
+}
+
 function BacktestTargetRow({ target, index }: { target: BacktestTargetSummary; index: number }) {
   return (
     <ScrollReveal
@@ -171,8 +218,9 @@ function BacktestTargetRow({ target, index }: { target: BacktestTargetSummary; i
 }
 
 export async function EngineRoom() {
-  const [health, pending, accuracy, backtest] = await Promise.all([
+  const [health, briefing, pending, accuracy, backtest] = await Promise.all([
     safeGetSystemHealth(),
+    safeGetBriefingsLatest(),
     safeGetForecastsPending(),
     safeGetForecastsAccuracy(),
     safeGetBacktestSummary(),
@@ -259,11 +307,15 @@ export async function EngineRoom() {
           </ScrollReveal>
         </div>
 
+        {/* WEEKLY BRIEFING -- above Pending, per spec: the fully-automated,
+            fact-gated narrative (briefing.py). See BriefingPanel. */}
+        <BriefingPanel briefing={briefing} index={sources.length + 3} />
+
         {/* PENDING -- this week's predictions, logged and waiting to be
             checked against reality. Soil panel, matching the register the
             "Forecasts" placeholder used before real forecasting existed. */}
         <ScrollReveal
-          index={sources.length + 3}
+          index={sources.length + 4}
           staggerMs={70}
           className="border border-java/15 bg-soil px-8 py-8 text-cream md:px-10 md:py-10"
         >
@@ -286,7 +338,7 @@ export async function EngineRoom() {
         {/* GRADED LOG -- every forecast checked against what actually
             happened, headlined by the overall beat-baseline rate. */}
         <ScrollReveal
-          index={sources.length + 4}
+          index={sources.length + 5}
           staggerMs={70}
           className="border border-java/15 bg-cream px-6 py-6 md:px-10 md:py-8"
         >
@@ -339,7 +391,7 @@ export async function EngineRoom() {
             registers used everywhere else in this room, so this can never
             be misread as more live-forecast evidence. */}
         <ScrollReveal
-          index={sources.length + 5}
+          index={sources.length + 6}
           staggerMs={70}
           className="border border-dashed border-cerulean/50 bg-[repeating-linear-gradient(135deg,rgba(165,188,214,0.12)_0px,rgba(165,188,214,0.12)_1px,transparent_1px,transparent_12px)] px-6 py-8 md:px-10 md:py-10"
         >

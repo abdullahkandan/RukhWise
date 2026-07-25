@@ -37,3 +37,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python forecast.py --predict
+
+      # Fully automated, fact-gated weekly briefing (briefing.py). Runs
+      # after both grade and predict so it can report on last week's
+      # graded outcomes and this week's newly logged predictions in the
+      # same run. continue-on-error: a briefing failure (Groq down, an
+      # unexpected exception) must never take down the forecast workflow
+      # that grading/predicting just completed -- briefing.py already
+      # falls back to a template briefing internally for the ordinary
+      # "Groq unreachable" or "draft failed verification" cases; this is
+      # the outer safety net for anything else, logged loudly, not silent.
+      - name: Publish weekly briefing
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python briefing.py
