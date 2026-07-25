@@ -1200,5 +1200,136 @@ def insert_backtests(rows: list[dict]) -> dict:
     return {"inserted": inserted, "failed": failed}
 
 
+# --------------------------------------------------------------------------
+# Curriculum alignment (curriculum.py) -- a standalone reference dataset,
+# not part of the postings/skill_mentions core schema, same reasoning as
+# backtests/forecasts above: its own migration SQL, printed by hand and run
+# separately, not folded into ALL_SQL/print_schema_sql(). curriculum_courses
+# is small and rarely updated (a handful of HEC/NCEAC PDFs, not a growing
+# scraped corpus), so curriculum.py fully clears and rewrites it on every
+# run rather than incrementally upserting -- see clear_curriculum_data().
+# --------------------------------------------------------------------------
+
+CURRICULUM_TABLES_SQL = """\
+create table if not exists curriculum_courses (
+    id uuid primary key default gen_random_uuid(),
+    source_document text not null,
+    degree_program text not null,
+    course_code text,
+    course_title text not null,
+    credit_hours text,
+    topics_raw text,
+    extracted_at timestamptz not null
+);
+
+create table if not exists curriculum_skill_map (
+    id uuid primary key default gen_random_uuid(),
+    course_id uuid not null references curriculum_courses(id) on delete cascade,
+    skill text not null,
+    match_source text not null,
+    unique(course_id, skill, match_source)
+);
+"""
+
+
+def clear_curriculum_data() -> None:
+    """Deletes every row in curriculum_skill_map and curriculum_courses
+    (skill_map first -- both would cascade via the FK anyway, but explicit
+    is cheap and doesn't depend on that). Called at the start of every
+    curriculum.py run, same full-recomputation pattern as
+    truncate_backtests()."""
+    client = _get_client()
+    client.table("curriculum_skill_map").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+    client.table("curriculum_courses").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+
+
+def store_curriculum_courses(rows: list[dict]) -> list[dict]:
+    """Batch-insert curriculum_courses. Returns the inserted rows
+    (including their generated id), needed immediately after by
+    curriculum.py to build curriculum_skill_map rows -- unlike postings,
+    there's no natural pre-insert key (course_code is often a non-unique
+    template pattern, e.g. "CS1xx"), so the id has to come from the
+    insert response itself, not be derived."""
+    if not rows:
+        return []
+    client = _get_client()
+    inserted: list[dict] = []
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = rows[i : i + _BATCH_SIZE]
+        try:
+            result = client.table("curriculum_courses").insert(batch).execute()
+            inserted.extend(result.data or [])
+        except Exception as exc:
+            logger.error(f"Batch curriculum_courses insert failed ({len(batch)} rows): {exc}")
+    logger.info(f"store_curriculum_courses: inserted={len(inserted)}/{len(rows)}")
+    return inserted
+
+
+def get_curriculum_courses() -> list[dict]:
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("curriculum_courses")
+            .select("id,source_document,degree_program,course_code,course_title,credit_hours,topics_raw")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
+def store_curriculum_skill_map(rows: list[dict]) -> dict:
+    """Batch-insert curriculum_skill_map rows -- each needs course_id,
+    skill, match_source ('title' or 'topics'). ON CONFLICT DO NOTHING via
+    upsert with ignore_duplicates, since the same skill can legitimately
+    be matched via both title and topics for one course (two distinct
+    rows, different match_source), but never twice with the SAME
+    match_source."""
+    if not rows:
+        return {"inserted": 0, "failed": 0}
+    client = _get_client()
+    inserted = 0
+    failed = 0
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = rows[i : i + _BATCH_SIZE]
+        try:
+            result = (
+                client.table("curriculum_skill_map")
+                .upsert(batch, on_conflict="course_id,skill,match_source", ignore_duplicates=True)
+                .execute()
+            )
+            inserted += len(result.data or [])
+        except Exception as exc:
+            logger.error(f"Batch curriculum_skill_map insert failed ({len(batch)} rows): {exc}")
+            failed += len(batch)
+    logger.info(f"store_curriculum_skill_map: inserted={inserted} failed={failed}")
+    return {"inserted": inserted, "failed": failed}
+
+
+def get_curriculum_skill_map() -> list[dict]:
+    client = _get_client()
+    rows = []
+    offset = 0
+    while True:
+        res = (
+            client.table("curriculum_skill_map")
+            .select("course_id,skill,match_source")
+            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = res.data
+        rows.extend(batch)
+        if len(batch) < _QUERY_PAGE_SIZE:
+            break
+        offset += _QUERY_PAGE_SIZE
+    return rows
+
+
 if __name__ == "__main__":
     print_schema_sql()

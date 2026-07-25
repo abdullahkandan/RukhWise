@@ -6,3 +6,4 @@ python-dotenv
 pyyaml
 python-jobspy
 rapidfuzz
+pdfplumber

@@ -576,3 +576,52 @@ export interface BacktestDetailResponse {
 export function getBacktestDetail() {
   return apiFetch<BacktestDetailResponse>("/backtest/detail");
 }
+
+// ---------------------------------------------------------------------------
+// /curriculum/alignment & /curriculum/gaps
+//
+// SCOPE LIMITATION: both source curricula (NCEAC BS Computing Disciplines
+// 2023, HEC Computer Science 2025) cover COMPUTING disciplines only. This
+// compares computing education against computing-sector market demand
+// (technology_it/engineering postings) -- nothing else on the site.
+// ---------------------------------------------------------------------------
+
+export interface CurriculumSkillEntry {
+  skill: string;
+  display: string;
+  category: string;
+  posting_count: number;
+  company_count: number;
+  course_count?: number;
+}
+
+export interface CurriculumAlignmentResponse {
+  scope_note: string;
+  matching_note: string;
+  market_domains: string[];
+  market_postings_considered: number;
+  courses_total: number;
+  courses_matched: number;
+  courses_unmatched: number;
+  taught_and_demanded: CurriculumSkillEntry[];
+  demanded_not_taught: CurriculumSkillEntry[];
+  taught_not_demanded: CurriculumSkillEntry[];
+  taught_not_demanded_note: string;
+}
+
+export function getCurriculumAlignment() {
+  return apiFetch<CurriculumAlignmentResponse>("/curriculum/alignment");
+}
+
+export interface CurriculumGapsResponse {
+  scope_note: string;
+  matching_note: string;
+  market_domains: string[];
+  min_companies_threshold: number;
+  count: number;
+  gaps: CurriculumSkillEntry[];
+}
+
+export function getCurriculumGaps() {
+  return apiFetch<CurriculumGapsResponse>("/curriculum/gaps");
+}

@@ -1683,6 +1683,175 @@ def backtest_detail():
 
 
 # --------------------------------------------------------------------------
+# Curriculum alignment -- compares HEC/NCEAC computing curricula (parsed by
+# curriculum.py from data/curricula/ PDFs) against live market demand.
+#
+# SCOPE LIMITATION: both source documents cover COMPUTING disciplines only
+# -- this index says nothing about trades, healthcare, education, or any
+# other domain this project tracks. Market demand is deliberately scoped
+# to postings in technology_it/engineering to match.
+#
+# Unlike every other endpoint above, this explicitly filters mentions to
+# extraction_method='taxonomy_v3' (the current pass) and uses
+# get_taxonomy_v3() for display names -- see the note on
+# queries.get_taxonomy() for why that matters and why it's NOT applied
+# retroactively to the rest of this file here.
+# --------------------------------------------------------------------------
+
+CURRICULUM_SCOPE_NOTE = (
+    "Both source documents (NCEAC BS Computing Disciplines 2023, HEC Computer Science "
+    "2025) cover COMPUTING disciplines only. This index compares computing education "
+    "against computing-sector market demand -- it says nothing about trades, "
+    "healthcare, education, or any other domain this project tracks."
+)
+CURRICULUM_TAUGHT_NOT_DEMANDED_NOTE = (
+    "Low or zero market presence is not the same as low value -- foundational "
+    "computing subjects (e.g. data structures, algorithms, operating systems) may "
+    "never appear as a NAMED requirement in a job posting even though the role "
+    "depends on them."
+)
+CURRICULUM_MATCHING_NOTE = (
+    "Matching is taxonomy-based: a skill outside taxonomy_v3 is invisible on BOTH "
+    "sides of this comparison, not just one. A curriculum topic and a market demand "
+    "that are both real but both unnamed in the taxonomy will never appear here."
+)
+CURRICULUM_MARKET_DOMAINS = ("technology_it", "engineering")
+CURRICULUM_EXTRACTION_METHOD = "taxonomy_v3"
+CURRICULUM_GAP_MIN_COMPANIES = 5
+CURRICULUM_NEAR_ZERO_POSTINGS = 2
+
+
+def _curriculum_market_stats() -> tuple[dict[str, set[str]], dict[str, set[str]], int]:
+    """Returns (skill -> distinct posting ids, skill -> distinct company
+    keys, total postings considered), restricted to postings in
+    CURRICULUM_MARKET_DOMAINS and to extraction_method='taxonomy_v3'."""
+    postings = queries.get_postings()
+    mentions = queries.get_skill_mentions()
+
+    scoped_postings = [p for p in postings if p.get("domain") in CURRICULUM_MARKET_DOMAINS]
+    scoped_ids = {p["id"] for p in scoped_postings}
+
+    scoped_mentions = [
+        m for m in mentions
+        if m["posting_id"] in scoped_ids and m.get("extraction_method") == CURRICULUM_EXTRACTION_METHOD
+    ]
+
+    skill_postings = _skill_postings_map(scoped_mentions)
+    skill_companies = _skill_company_map(scoped_postings, scoped_mentions)
+    return skill_postings, skill_companies, len(scoped_postings)
+
+
+def _curriculum_skill_courses() -> dict[str, set[str]]:
+    """skill -> set of distinct curriculum_courses ids that matched it,
+    via either match_source (title or topics)."""
+    skill_map = queries.get_curriculum_skill_map()
+    out: dict[str, set[str]] = defaultdict(set)
+    for row in skill_map:
+        out[row["skill"]].add(row["course_id"])
+    return out
+
+
+def _build_curriculum_alignment() -> dict:
+    taxonomy = queries.get_taxonomy_v3()
+    skill_postings, skill_companies, total_market_postings = _curriculum_market_stats()
+    skill_courses = _curriculum_skill_courses()
+    courses = queries.get_curriculum_courses()
+
+    def _display(skill_key: str) -> dict:
+        spec = taxonomy["skills"].get(skill_key, {})
+        return {
+            "skill": skill_key,
+            "display": spec.get("display", skill_key),
+            "category": spec.get("category", "unknown"),
+        }
+
+    all_market_skills = set(skill_postings.keys())
+    all_curriculum_skills = set(skill_courses.keys())
+
+    # a) TAUGHT AND DEMANDED -- ranked by market posting count.
+    taught_and_demanded = [
+        {
+            **_display(skill),
+            "posting_count": len(skill_postings[skill]),
+            "company_count": len(skill_companies.get(skill, ())),
+            "course_count": len(skill_courses[skill]),
+        }
+        for skill in (all_market_skills & all_curriculum_skills)
+    ]
+    taught_and_demanded.sort(key=lambda r: -r["posting_count"])
+
+    # b) DEMANDED NOT TAUGHT -- the headline list. >=5 distinct companies,
+    # zero curriculum matches. Ranked by company count (the qualifying
+    # metric), posting count as tiebreak.
+    demanded_not_taught = []
+    for skill in (all_market_skills - all_curriculum_skills):
+        company_count = len(skill_companies.get(skill, ()))
+        if company_count >= CURRICULUM_GAP_MIN_COMPANIES:
+            demanded_not_taught.append({
+                **_display(skill),
+                "posting_count": len(skill_postings[skill]),
+                "company_count": company_count,
+            })
+    demanded_not_taught.sort(key=lambda r: (-r["company_count"], -r["posting_count"]))
+
+    # c) TAUGHT NOT DEMANDED -- curriculum skills with zero/near-zero
+    # market presence. Ranked by course_count (most heavily taught first)
+    # since that's the most informative ordering for this list.
+    taught_not_demanded = []
+    for skill in all_curriculum_skills:
+        posting_count = len(skill_postings.get(skill, ()))
+        if posting_count <= CURRICULUM_NEAR_ZERO_POSTINGS:
+            taught_not_demanded.append({
+                **_display(skill),
+                "posting_count": posting_count,
+                "company_count": len(skill_companies.get(skill, ())),
+                "course_count": len(skill_courses[skill]),
+            })
+    taught_not_demanded.sort(key=lambda r: -r["course_count"])
+
+    matched_course_ids = {cid for ids in skill_courses.values() for cid in ids}
+
+    return {
+        "scope_note": CURRICULUM_SCOPE_NOTE,
+        "matching_note": CURRICULUM_MATCHING_NOTE,
+        "market_domains": list(CURRICULUM_MARKET_DOMAINS),
+        "market_postings_considered": total_market_postings,
+        "courses_total": len(courses),
+        "courses_matched": len(matched_course_ids),
+        "courses_unmatched": len(courses) - len(matched_course_ids),
+        "taught_and_demanded": taught_and_demanded,
+        "demanded_not_taught": demanded_not_taught,
+        "taught_not_demanded": taught_not_demanded,
+        "taught_not_demanded_note": CURRICULUM_TAUGHT_NOT_DEMANDED_NOTE,
+    }
+
+
+@app.get("/curriculum/alignment")
+@cached()
+def curriculum_alignment():
+    """The full index: taught+demanded, demanded-not-taught, and
+    taught-not-demanded, plus course parse/match summary stats."""
+    return _build_curriculum_alignment()
+
+
+@app.get("/curriculum/gaps")
+@cached()
+def curriculum_gaps():
+    """The headline list on its own: skills the market demands (>=5
+    distinct companies, technology_it/engineering only) that zero
+    curriculum course matches."""
+    data = _build_curriculum_alignment()
+    return {
+        "scope_note": data["scope_note"],
+        "matching_note": data["matching_note"],
+        "market_domains": data["market_domains"],
+        "min_companies_threshold": CURRICULUM_GAP_MIN_COMPANIES,
+        "count": len(data["demanded_not_taught"]),
+        "gaps": data["demanded_not_taught"],
+    }
+
+
+# --------------------------------------------------------------------------
 # GET / -- minimal liveness/index, not part of the spec but near-zero cost
 # --------------------------------------------------------------------------
 
@@ -1699,5 +1868,6 @@ def root():
             "/forecasts/pending", "/forecasts/accuracy",
             "/backtest/summary", "/backtest/detail",
             "/insights/live", "/system/health",
+            "/curriculum/alignment", "/curriculum/gaps",
         ],
     }

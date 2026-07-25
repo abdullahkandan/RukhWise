@@ -28,6 +28,7 @@ from cache import cached
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 _TAXONOMY_PATH = _PROJECT_ROOT / "rukhwise_scraper" / "taxonomy_v1.yaml"
+_TAXONOMY_V3_PATH = _PROJECT_ROOT / "rukhwise_scraper" / "taxonomy_v3.yaml"
 
 load_dotenv(_PROJECT_ROOT / ".env")
 
@@ -36,7 +37,7 @@ _QUERY_PAGE_SIZE = 1000
 POSTING_COLUMNS = (
     "id,source,category,title,company,city,posting_date,experience_raw,"
     "salary_min,salary_max,salary_raw,currency,detail_url,skills_raw,"
-    "first_seen_at,last_seen_at,scrape_run_id"
+    "first_seen_at,last_seen_at,scrape_run_id,domain"
 )
 
 # --- RLS policy SQL -- print via `python queries.py` -----------------------
@@ -46,6 +47,8 @@ alter table postings enable row level security;
 alter table skill_mentions enable row level security;
 alter table forecasts enable row level security;
 alter table backtests enable row level security;
+alter table curriculum_courses enable row level security;
+alter table curriculum_skill_map enable row level security;
 
 drop policy if exists "public read" on postings;
 create policy "public read" on postings for select using (true);
@@ -58,6 +61,12 @@ create policy "public read" on forecasts for select using (true);
 
 drop policy if exists "public read" on backtests;
 create policy "public read" on backtests for select using (true);
+
+drop policy if exists "public read" on curriculum_courses;
+create policy "public read" on curriculum_courses for select using (true);
+
+drop policy if exists "public read" on curriculum_skill_map;
+create policy "public read" on curriculum_skill_map for select using (true);
 """
 
 
@@ -101,8 +110,28 @@ def get_skill_mentions() -> list[dict]:
 def get_taxonomy() -> dict:
     """Not a Supabase read, but still centralized here -- both queries.py
     and main.py need skill display names/categories, and this is the one
-    place that touches the filesystem for it."""
+    place that touches the filesystem for it.
+
+    NOTE (found while building curriculum alignment, not fixed here --
+    out of scope for that task, flagged separately): this reads
+    taxonomy_v1.yaml, and none of main.py's ~14 get_skill_mentions()
+    call sites filter by extraction_method. Every existing endpoint is
+    therefore blending taxonomy_v1/v2/v3 mention rows together and
+    looking up display/category names against v1 only -- v2/v3-only
+    skill keys (customer_service's v3 category correction, every new
+    taxonomy_v3 entry) are invisible or mis-labeled everywhere except
+    the curriculum endpoints below, which use get_taxonomy_v3() and
+    explicitly filter to extraction_method='taxonomy_v3' instead."""
     with open(_TAXONOMY_PATH, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+@cached()
+def get_taxonomy_v3() -> dict:
+    """Current taxonomy (v3) -- used by the curriculum alignment
+    endpoints specifically, which need display/category names that
+    actually exist for v3-only skill keys."""
+    with open(_TAXONOMY_V3_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -137,6 +166,22 @@ def get_backtests() -> list[dict]:
     scratch on every run, unlike forecasts' append-only history; see
     backtest.py's module docstring for why the two must never be mixed."""
     return _fetch_all("backtests", BACKTEST_COLUMNS)
+
+
+CURRICULUM_COURSE_COLUMNS = "id,source_document,degree_program,course_code,course_title,credit_hours,topics_raw"
+
+
+@cached()
+def get_curriculum_courses() -> list[dict]:
+    """Every curriculum_courses row -- see curriculum.py for how these
+    were parsed from the HEC/NCEAC PDFs in data/curricula/."""
+    return _fetch_all("curriculum_courses", CURRICULUM_COURSE_COLUMNS)
+
+
+@cached()
+def get_curriculum_skill_map() -> list[dict]:
+    """Every curriculum_skill_map row (course_id, skill, match_source)."""
+    return _fetch_all("curriculum_skill_map", "course_id,skill,match_source")
 
 
 if __name__ == "__main__":
