@@ -714,21 +714,30 @@ def update_postings_structured(rows: list[dict]) -> dict:
     return {"updated": updated, "failed": failed}
 
 
-def get_postings_for_domain_classification() -> list[dict]:
-    """id, source, title, description for every posting -- what
-    domain_classifier.py needs: title for stage 1, description for stages
-    2 and 3. Read-only; classify_domains.py's only write path is
-    update_postings_domain() below."""
+def get_postings_for_domain_classification(only_unclassified: bool = False) -> list[dict]:
+    """id, source, title, description for postings needing domain
+    classification -- title for stage 1, description for stages 2 and 3.
+    Read-only; classify_domains.py's only write path is
+    update_postings_domain() below.
+
+    only_unclassified=True scopes strictly to domain IS NULL -- the
+    incremental default wired into collect.py after every collection run.
+    domain is NEVER null after a posting has been through
+    classify_postings() even once (unresolved rows get domain='other',
+    domain_method='unclassified' -- a real answer, not a gap), so this
+    filter naturally, permanently excludes every already-classified
+    posting and only ever finds genuinely new arrivals. only_unclassified=
+    False (classify_domains.py --all) returns every posting, for a
+    deliberate full-corpus reclassification (e.g. after a domains.yaml
+    edit)."""
     client = _get_client()
     rows = []
     offset = 0
     while True:
-        res = (
-            client.table("postings")
-            .select("id,source,title,description")
-            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
-            .execute()
-        )
+        query = client.table("postings").select("id,source,title,description")
+        if only_unclassified:
+            query = query.is_("domain", "null")
+        res = query.range(offset, offset + _QUERY_PAGE_SIZE - 1).execute()
         batch = res.data
         rows.extend(batch)
         if len(batch) < _QUERY_PAGE_SIZE:
@@ -767,21 +776,29 @@ def update_postings_domain(rows: list[dict]) -> dict:
     return {"updated": updated, "failed": failed}
 
 
-def get_postings_for_family_classification() -> list[dict]:
-    """id, title, domain for every posting -- what
-    job_family_classifier.py needs: title for both stages, domain for
-    stage 1's domain-scoped search. Read-only; the only write path is
-    update_postings_family() below."""
+def get_postings_for_family_classification(only_unclassified: bool = False) -> list[dict]:
+    """id, title, domain for postings needing job-family classification --
+    title for both stages, domain for stage 1's domain-scoped search.
+    Read-only; the only write path is update_postings_family() below.
+
+    only_unclassified=True scopes strictly to family_method IS NULL --
+    the incremental default wired into collect.py after every collection
+    run. family_method is NEVER null after a posting has been through
+    classify_postings() even once (an unresolved title gets
+    family_method='unmatched', job_family=None -- a real answer, not a
+    gap), so this filter naturally, permanently excludes every already-
+    classified posting and only ever finds genuinely new arrivals.
+    only_unclassified=False (classify_job_families.py --all) returns
+    every posting, for a deliberate full-corpus reclassification (e.g.
+    after a job_families.yaml edit)."""
     client = _get_client()
     rows = []
     offset = 0
     while True:
-        res = (
-            client.table("postings")
-            .select("id,title,domain")
-            .range(offset, offset + _QUERY_PAGE_SIZE - 1)
-            .execute()
-        )
+        query = client.table("postings").select("id,title,domain")
+        if only_unclassified:
+            query = query.is_("family_method", "null")
+        res = query.range(offset, offset + _QUERY_PAGE_SIZE - 1).execute()
         batch = res.data
         rows.extend(batch)
         if len(batch) < _QUERY_PAGE_SIZE:

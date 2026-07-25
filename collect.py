@@ -34,6 +34,20 @@ the postings it newly inserted -- already-known postings aren't re-fetched
 for detail on every run. --enrich-all is the separate, explicit path for
 backfilling postings collected before enrichment existed, or any that
 failed enrichment previously.
+
+Every collection run also auto-extracts skills for whatever it touched
+(see _extract_skills_for_run()) -- that step is local (regex matching
+against taxonomy_v3.yaml, no network calls) so it has no external
+dependency and stays wired directly into collection.
+
+Domain and job-family classification are deliberately NOT wired in here
+-- they depend on Groq, and collection must stay dependency-free on
+everything except the job boards themselves (see .github/workflows/
+classify.yml, a fully separate scheduled workflow, and
+classify_domains.py / classify_job_families.py's own docstrings). A Groq
+outage or rate-limit wall never touches collection, enrichment, or
+extraction; new postings simply stay domain/job_family = NULL until
+classify.yml's next run catches up.
 """
 
 from __future__ import annotations
@@ -88,6 +102,7 @@ def _extract_skills_for_run(run_id: str) -> dict:
     from extract import run_extraction
 
     return run_extraction(run_id=run_id)
+
 
 
 def run_mustakbil(pages: int, start_url: str, category: str, run_id: str) -> None:

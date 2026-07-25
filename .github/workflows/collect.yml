@@ -26,6 +26,14 @@ jobs:
       # after upsert+enrichment, scoped to that run's scrape_run_id. No separate
       # extraction step is needed here; --enrich-all / extract.py --all are
       # one-time backfill commands run manually, not part of the schedule.
+      #
+      # Each step also incrementally classifies domain and job_family for
+      # every posting still missing an answer (collect.py's
+      # _classify_pending(), called after extraction) -- not just this
+      # run's own new postings, the whole current backlog. No separate
+      # workflow step needed for this either; --all full-corpus
+      # reclassification (classify_domains.py / classify_job_families.py)
+      # stays a manual, explicit command, never scheduled.
       - name: Run Mustakbil collection (general feed)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

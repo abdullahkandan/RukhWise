@@ -1,0 +1,60 @@
+name: Domain + Job-Family Classification
+
+on:
+  schedule:
+    # 04:00 UTC daily -- one hour after collect.yml's 03:00 UTC run, so
+    # today's newly-collected postings are already in Supabase by the
+    # time this looks for domain IS NULL / family_method IS NULL rows.
+    # Deliberately a SEPARATE workflow, not a step in collect.yml: this is
+    # the only place in the whole pipeline that depends on Groq, and
+    # collection must stay dependency-free on everything except the job
+    # boards themselves. A Groq outage or rate-limit wall blocks this
+    # workflow only -- collection, enrichment, extraction, forecasting,
+    # and grading are all unaffected and keep running on schedule; new
+    # postings just stay unclassified until this catches up.
+    - cron: "0 4 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Domain before job-family: job_family_classifier.py's stage 1 does
+      # a domain-scoped keyword search, so a posting's domain should
+      # already be filled in by the time family classification looks at
+      # it. Both are strictly incremental (domain IS NULL / family_method
+      # IS NULL only -- see each script's own docstring) and write after
+      # every batch, so an interrupted or timed-out run keeps whatever it
+      # already wrote; --max-batches 10 caps a single run to at most 200
+      # postings (10 * GROQ_BATCH_SIZE) so a large backlog drains over
+      # several days instead of one run stalling on a long LLM sequence.
+      # continue-on-error on both: a failure here must never look like a
+      # broader pipeline problem, since this workflow is independent of
+      # collect.yml/forecast.yml by design -- classification is derived
+      # data, it can always catch up on the next scheduled run.
+      - name: Classify domain (incremental, capped)
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python classify_domains.py --max-batches 10
+
+      - name: Classify job family (incremental, capped)
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python classify_job_families.py --max-batches 10
