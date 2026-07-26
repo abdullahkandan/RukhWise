@@ -11,6 +11,11 @@ export const metadata: Metadata = {
   description: "Where Pakistan's computing curricula and computing-sector job demand actually meet, and where they don't.",
 };
 
+// The page is a summary, not a database dump. Full lists stay available on
+// /curriculum/alignment; a visitor gets the head of each and a count.
+const TOP_N = 10;
+const TAIL_N = 5;
+
 function Prose({ children }: { children: React.ReactNode }) {
   return <div className="mt-4 max-w-2xl font-sans text-[15px] leading-relaxed text-java/75">{children}</div>;
 }
@@ -89,13 +94,7 @@ export default async function CurriculumPage() {
         </h1>
 
         <div className="mt-8 max-w-2xl border-l-2 border-java/30 pl-5">
-          <p className="font-sans text-base leading-relaxed text-java/80">
-            <strong className="text-java">Scope limitation.</strong> Both source curricula — NCEAC&rsquo;s BS
-            Computing Disciplines (2023) and HEC&rsquo;s Computer Science booklet (2025) — cover COMPUTING
-            disciplines only. This page compares computing education against computing-sector demand
-            ({domainLabel} postings). It says nothing about trades, healthcare, education, or any other
-            domain this site tracks.
-          </p>
+          <p className="font-sans text-base leading-relaxed text-java/80">{data.scope_note}</p>
         </div>
 
         <div className="mt-12 grid grid-cols-2 gap-8 md:grid-cols-4">
@@ -125,16 +124,11 @@ export default async function CurriculumPage() {
           Demanded in the market, absent from the curriculum
         </h2>
         <p className="mt-4 max-w-2xl font-sans text-[15px] leading-relaxed text-cream/70">
-          Skills named in {domainLabel.toLowerCase()} postings by at least 5 distinct companies, with zero
-          matches anywhere in either curriculum document — not in a course title, not in a course&rsquo;s
-          own stated learning outcomes.
-        </p>
-        <p className="mt-3 max-w-2xl font-sans text-sm leading-relaxed text-cream/50">
-          {data.demanded_not_taught_note}
+          Asked for by at least 5 companies. Taught in neither curriculum.
         </p>
 
         <ol className="mt-10 flex flex-col gap-1">
-          {data.demanded_not_taught.map((row, i) => (
+          {data.demanded_not_taught.slice(0, TOP_N).map((row, i) => (
             <SkillRow
               key={row.skill}
               rank={i + 1}
@@ -151,6 +145,11 @@ export default async function CurriculumPage() {
             <li className="font-sans text-sm text-cream/50">No qualifying gaps found.</li>
           )}
         </ol>
+        {data.demanded_not_taught.length > TOP_N && (
+          <p className="mt-6 font-mono text-xs text-cream/40">
+            Top {TOP_N} of {data.demanded_not_taught.length}, by company count.
+          </p>
+        )}
       </Section>
 
       {/* Confirmation -- taught and demanded */}
@@ -160,12 +159,11 @@ export default async function CurriculumPage() {
           Taught and demanded
         </h2>
         <p className="mt-4 max-w-2xl font-sans text-[15px] leading-relaxed text-java/70">
-          Skills that appear in both places — ranked by market posting count. This is the overlap the
-          curricula are already getting right.
+          In both places, ranked by postings. What the curricula already get right.
         </p>
 
         <ol className="mt-10 flex flex-col gap-1">
-          {data.taught_and_demanded.slice(0, 25).map((row, i) => (
+          {data.taught_and_demanded.slice(0, TOP_N).map((row, i) => (
             <SkillRow
               key={row.skill}
               rank={i + 1}
@@ -181,41 +179,42 @@ export default async function CurriculumPage() {
             <li className="font-sans text-sm text-java/50">No overlap found.</li>
           )}
         </ol>
-        {data.taught_and_demanded.length > 25 && (
+        {data.taught_and_demanded.length > TOP_N && (
           <p className="mt-6 font-mono text-xs text-java/40">
-            +{data.taught_and_demanded.length - 25} more skills matched in both, not shown.
+            Top {TOP_N} of {data.taught_and_demanded.length}.
           </p>
         )}
       </Section>
 
-      {/* Taught, not demanded */}
-      <Section register="cream" className="py-20 md:py-28 border-t border-java/10">
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-java/50">The other direction</p>
-        <h2 className="mt-3 max-w-2xl font-display text-3xl font-medium leading-tight md:text-4xl">
-          Taught, barely visible in postings
-        </h2>
-        <Prose>
-          <p>{data.taught_not_demanded_note}</p>
-        </Prose>
+      {/* Taught, not demanded. The API drops this list entirely rather than
+          publish a couple of stragglers, so an empty array means "nothing
+          cleared the bar" -- render nothing at all, not an empty state. */}
+      {data.taught_not_demanded.length > 0 && (
+        <Section register="cream" className="py-20 md:py-28 border-t border-java/10">
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-java/50">The other direction</p>
+          <h2 className="mt-3 max-w-2xl font-display text-3xl font-medium leading-tight md:text-4xl">
+            Taught, barely visible in postings
+          </h2>
+          <p className="mt-4 max-w-2xl font-sans text-[15px] leading-relaxed text-java/70">
+            Taught, but named in almost no postings. Low demand is not low value.
+          </p>
 
-        <ol className="mt-10 flex flex-col gap-1">
-          {data.taught_not_demanded.slice(0, 20).map((row, i) => (
-            <SkillRow
-              key={row.skill}
-              rank={i + 1}
-              display={row.display}
-              category={row.category}
-              primaryLabel={`course${row.course_count === 1 ? "" : "s"}`}
-              primaryValue={row.course_count ?? 0}
-              secondaryLabel="postings"
-              secondaryValue={row.posting_count}
-            />
-          ))}
-          {data.taught_not_demanded.length === 0 && (
-            <li className="font-sans text-sm text-java/50">Nothing in this bucket.</li>
-          )}
-        </ol>
-      </Section>
+          <ol className="mt-10 flex flex-col gap-1">
+            {data.taught_not_demanded.slice(0, TAIL_N).map((row, i) => (
+              <SkillRow
+                key={row.skill}
+                rank={i + 1}
+                display={row.display}
+                category={row.category}
+                primaryLabel={`course${row.course_count === 1 ? "" : "s"}`}
+                primaryValue={row.course_count ?? 0}
+                secondaryLabel={`posting${row.posting_count === 1 ? "" : "s"}`}
+                secondaryValue={row.posting_count}
+              />
+            ))}
+          </ol>
+        </Section>
+      )}
 
       {/* Methodology */}
       <Section register="cream" className="pb-24 pt-4 md:pb-32">
@@ -223,23 +222,33 @@ export default async function CurriculumPage() {
         <Prose>
           <ul className="flex flex-col gap-4">
             <li>
+              <strong className="text-java">Sources and scope.</strong> NCEAC&rsquo;s BS Computing
+              Disciplines (2023) and HEC&rsquo;s Computer Science booklet (2025), compared against{" "}
+              {domainLabel} postings — {formatNumber(data.market_postings_considered)} of them.
+            </li>
+            <li>
+              <strong className="text-java">What counts as a skill.</strong> {data.demanded_not_taught_note}
+            </li>
+            <li>
               <strong className="text-java">Taxonomy-based matching, both ways.</strong> {data.matching_note}
             </li>
             <li>
-              <strong className="text-java">Curriculum documents state minimums.</strong> HEC/NCEAC curricula
-              define a floor, not a ceiling — individual universities routinely exceed them with additional
-              electives, updated tooling, and department-specific specializations that neither source
-              document lists. A skill appearing here as &ldquo;not taught&rdquo; means not taught according
-              to the national minimum curriculum, not that no Pakistani computing graduate has ever
-              encountered it.
+              <strong className="text-java">Curricula state minimums.</strong> They define a floor, not a
+              ceiling — universities routinely exceed them with electives and specializations neither
+              document lists. &ldquo;Not taught&rdquo; means not in the national minimum curriculum, not
+              that no graduate has encountered it.
             </li>
             <li>
-              <strong className="text-java">Course parsing is imperfect by nature.</strong> Both PDFs mix
-              table layouts, template course codes, and free-text course descriptions differently across
-              programs. {formatNumber(data.courses_total)} courses were extracted; {formatNumber(data.courses_matched)}{" "}
-              matched at least one taxonomy skill via title or stated topics. A course matching nothing
-              may genuinely teach no taxonomy-tracked skill by name, or may simply lack detailed topic text
-              in the source document — both are reported as unmatched, not silently distinguished.
+              <strong className="text-java">Thin demand, and zero rows.</strong>{" "}
+              {data.taught_not_demanded_note}
+            </li>
+            <li>
+              <strong className="text-java">Course parsing is imperfect.</strong> Both PDFs mix table
+              layouts, template course codes, and free-text descriptions.{" "}
+              {formatNumber(data.courses_total)} courses were extracted;{" "}
+              {formatNumber(data.courses_matched)} matched at least one taxonomy skill by title or stated
+              topics. A course matching nothing may teach no tracked skill by name, or may simply lack
+              topic text in the source — both are reported as unmatched, not silently distinguished.
             </li>
           </ul>
         </Prose>

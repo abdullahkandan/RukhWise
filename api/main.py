@@ -166,15 +166,19 @@ def _skill_postings_map(mentions: list[dict]) -> dict[str, set[str]]:
 # SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES excludes soft skills (near-
 # universal, low-signal) and office_admin likewise.
 #
-# This exact filter has now leaked three separate times from three
-# independent, incomplete reimplementations that each checked only
-# `category != 'soft'` (missing office_admin, and missing requirement_type
-# entirely -- which is how a work_arrangement ATTRIBUTE like On-Site ends
-# up presented as the market's "top skill"): once in the curriculum gap
-# lists, once in briefing.py/forecast.py's top-skills and forecast-target
-# selection, and now in /insights/live and the homepage's "market leader"
-# stat. _is_substantive_skill is the shared helper every one of those call
-# sites now goes through, so a fourth reimplementation should never happen.
+# This exact filter has leaked FOUR separate times from independent,
+# incomplete reimplementations that each checked only `category != 'soft'`
+# (missing office_admin, and missing requirement_type entirely -- which is
+# how a work_arrangement ATTRIBUTE like On-Site ends up presented as the
+# market's "top skill"): in briefing.py/forecast.py's top-skills and
+# forecast-target selection, in /insights/live and the homepage's "market
+# leader" stat, in /coverage's "learn this next" ranking, and in the
+# curriculum alignment lists -- where the fix was applied to only ONE of
+# the three derived lists, so Communication and Documentation headlined
+# "taught and demanded" and "taught, barely visible" was almost entirely
+# soft entries. Every one of those call sites now goes through this helper,
+# and the curriculum builder applies it at the INPUT sets rather than
+# per-list, so a partial fix isn't expressible there anymore.
 #
 # NOT applied to /skills/top's own category-scoped or include_soft-toggled
 # output, or to _posting_skills_map/_compute_skill_cooccurrence's default
@@ -186,10 +190,10 @@ SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES = frozenset({"soft", "office_admin"})
 
 def _has_skill_requirement_type(skill_key: str, taxonomy: dict) -> bool:
     """requirement_type == 'skill' (default when absent) -- the primitive
-    _is_substantive_skill composes from; also used standalone by the
-    curriculum alignment builder, where category exclusion is applied
-    selectively per-list rather than as one combined predicate (see
-    _build_curriculum_alignment's own comment)."""
+    _is_substantive_skill composes from. Used standalone only by /coverage,
+    which needs the attribute/credential/language exclusion (you can't learn
+    'on-site') but must NOT drop soft or office_admin skills: those are real
+    things a person can learn and legitimately appear in its advice."""
     return taxonomy["skills"].get(skill_key, {}).get("requirement_type", "skill") == "skill"
 
 
@@ -2029,27 +2033,22 @@ def backtest_detail():
 # --------------------------------------------------------------------------
 
 CURRICULUM_SCOPE_NOTE = (
-    "Both source documents (NCEAC BS Computing Disciplines 2023, HEC Computer Science "
-    "2025) cover COMPUTING disciplines only. This index compares computing education "
-    "against computing-sector market demand -- it says nothing about trades, "
-    "healthcare, education, or any other domain this project tracks."
+    "Compared against HEC's and NCEAC's official computing curricula. Computing "
+    "disciplines only, so it says nothing about the other fields this site tracks."
 )
 CURRICULUM_TAUGHT_NOT_DEMANDED_NOTE = (
-    "Low or zero market presence is not the same as low value -- foundational "
-    "computing subjects (e.g. data structures, algorithms, operating systems) may "
-    "never appear as a NAMED requirement in a job posting even though the role "
-    "depends on them."
+    "Foundational computing subjects (data structures, algorithms, operating systems) "
+    "may never appear as a NAMED requirement in a posting even though the role depends "
+    "on them, so a thin posting count here is not evidence a subject is unwanted. Rows "
+    "reading zero are never published -- an absence this data can't distinguish from "
+    "'the taxonomy never named it here' isn't a finding."
 )
 CURRICULUM_DEMANDED_NOT_TAUGHT_NOTE = (
-    "This list covers teachable technical and professional skills only. Workplace "
-    "attributes (on-site, shift, full-time), credentials, languages, and generic "
-    "workplace qualities are excluded -- a curriculum can't teach or fail to teach "
-    "those, so their absence isn't a gap. Soft skills and office/admin skills "
-    "(communication, documentation, scheduling, and similar) are also excluded, even "
-    "when the market data alone would qualify them: curriculum documents DO cover "
-    "these through general-education requirements the course parser can't itemize "
-    "skill-by-skill, so their appearance here would be a matching artifact of that "
-    "gap, not a real finding."
+    "All three lists count teachable technical and professional skills only. "
+    "Workplace attributes (on-site, shift, full-time), credentials and languages are "
+    "excluded because a curriculum can't teach them; soft and office/admin skills are "
+    "excluded because curricula do cover them, through general-education requirements "
+    "the course parser can't itemize skill-by-skill."
 )
 CURRICULUM_MATCHING_NOTE = (
     "Matching is taxonomy-based: a skill outside the active taxonomy is invisible "
@@ -2060,17 +2059,18 @@ CURRICULUM_MATCHING_NOTE = (
 CURRICULUM_MARKET_DOMAINS = ("technology_it", "engineering")
 CURRICULUM_GAP_MIN_COMPANIES = 5
 CURRICULUM_NEAR_ZERO_POSTINGS = 2
-# The headline gap list is about SUBSTANTIVE skills specifically -- soft
-# skills (communication, teamwork) and office_admin (data entry, scheduling)
-# are near-universal in postings AND get picked up on the curriculum side via
-# general-education requirements the course parser can't itemize, so their
-# presence in "demanded, not taught" is a matching artifact of that GenEd gap,
-# not a real substantive-curriculum finding. Excluded from the list entirely,
-# via the shared SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES (see that constant's
-# own comment, near _skill_postings_map, for why this is the one place that
-# set is defined). (Separately, non-skill requirement_types -- attribute,
-# language -- are excluded from ALL THREE lists upstream, via the shared
-# _has_skill_requirement_type.)
+# Floor for the "taught, barely visible" list: 1, not 0. A row asserting
+# zero postings is never a useful published claim -- see the list's own
+# comment in _build_curriculum_alignment.
+CURRICULUM_NEAR_ZERO_MIN_POSTINGS = 1
+# Below this many surviving rows the list is dropped entirely rather than
+# published as a couple of stragglers.
+CURRICULUM_NEAR_ZERO_MIN_ROWS = 3
+# All three lists are restricted to SUBSTANTIVE skills by one input-level
+# filter (_is_substantive_skill) inside _build_curriculum_alignment -- both
+# the requirement_type == "skill" half and the soft/office_admin category
+# half. See that call site's comment; there is deliberately no second,
+# per-list copy of either check.
 
 
 def _curriculum_market_stats() -> tuple[dict[str, set[str]], dict[str, set[str]], int]:
@@ -2113,15 +2113,21 @@ def _build_curriculum_alignment() -> dict:
             "category": spec.get("category", "unknown"),
         }
 
-    # Credential/experience aren't taxonomy entries at all (see
-    # structured_extraction.py). A curriculum can't teach, or fail to
-    # teach, a workplace attribute or a language requirement -- their
-    # presence in any of the three lists below is a matching artifact, not
-    # a finding. Filtered once, via the shared _has_skill_requirement_type,
-    # on both input sets, so it can't leak into just one of the three
-    # derived lists.
-    all_market_skills = {s for s in skill_postings.keys() if _has_skill_requirement_type(s, taxonomy)}
-    all_curriculum_skills = {s for s in skill_courses.keys() if _has_skill_requirement_type(s, taxonomy)}
+    # ONE filter, applied to both input sets, feeding all three derived
+    # lists. _is_substantive_skill enforces both halves at once:
+    # requirement_type == "skill" (a curriculum can't teach a workplace
+    # attribute or a language requirement) AND category not in
+    # {soft, office_admin} (curricula DO cover those via general-education
+    # requirements the course parser can't itemize, so a soft/admin entry on
+    # either side is a matching artifact, not a finding).
+    #
+    # This used to be _has_skill_requirement_type here plus a category check
+    # inside demanded_not_taught only -- which let Communication and
+    # Documentation headline "taught and demanded", and left "taught, barely
+    # visible" almost entirely soft entries. Filtering at the input keeps
+    # that from happening to any list, present or future.
+    all_market_skills = {s for s in skill_postings.keys() if _is_substantive_skill(s, taxonomy)}
+    all_curriculum_skills = {s for s in skill_courses.keys() if _is_substantive_skill(s, taxonomy)}
 
     # a) TAUGHT AND DEMANDED -- ranked by market posting count.
     taught_and_demanded = [
@@ -2135,31 +2141,36 @@ def _build_curriculum_alignment() -> dict:
     ]
     taught_and_demanded.sort(key=lambda r: -r["posting_count"])
 
-    # b) DEMANDED NOT TAUGHT -- the headline list. >=5 distinct companies,
-    # zero curriculum matches, and a SUBSTANTIVE skill (soft/office_admin
-    # excluded -- see SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES). Ranked by
-    # company count (the qualifying metric), posting count as tiebreak.
+    # b) DEMANDED NOT TAUGHT -- the headline list. >=5 distinct companies and
+    # zero curriculum matches. Substantive-only is already guaranteed by the
+    # input filter above; no local category check here. Ranked by company
+    # count (the qualifying metric), posting count as tiebreak.
     demanded_not_taught = []
     for skill in (all_market_skills - all_curriculum_skills):
-        entry = _display(skill)
-        if entry["category"] in SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES:
-            continue
         company_count = len(skill_companies.get(skill, ()))
         if company_count >= CURRICULUM_GAP_MIN_COMPANIES:
             demanded_not_taught.append({
-                **entry,
+                **_display(skill),
                 "posting_count": len(skill_postings[skill]),
                 "company_count": company_count,
             })
     demanded_not_taught.sort(key=lambda r: (-r["company_count"], -r["posting_count"]))
 
-    # c) TAUGHT NOT DEMANDED -- curriculum skills with zero/near-zero
-    # market presence. Ranked by course_count (most heavily taught first)
-    # since that's the most informative ordering for this list.
+    # c) TAUGHT NOT DEMANDED -- curriculum skills with low (not absent)
+    # market presence, ranked by course_count so the most heavily taught
+    # comes first.
+    #
+    # The floor is deliberate: a published row reading "0 postings" asserts
+    # an absence this data can't support -- it means "no posting named this
+    # skill", which is indistinguishable from "the taxonomy never had a
+    # chance to name it here". Same principle as the insight sanity gate:
+    # a claim that rounds to zero doesn't get published. And a list this
+    # short stops being a pattern, so below _MIN_ROWS it is dropped whole
+    # rather than shown as one or two lonely rows.
     taught_not_demanded = []
     for skill in all_curriculum_skills:
         posting_count = len(skill_postings.get(skill, ()))
-        if posting_count <= CURRICULUM_NEAR_ZERO_POSTINGS:
+        if CURRICULUM_NEAR_ZERO_MIN_POSTINGS <= posting_count <= CURRICULUM_NEAR_ZERO_POSTINGS:
             taught_not_demanded.append({
                 **_display(skill),
                 "posting_count": posting_count,
@@ -2167,6 +2178,8 @@ def _build_curriculum_alignment() -> dict:
                 "course_count": len(skill_courses[skill]),
             })
     taught_not_demanded.sort(key=lambda r: -r["course_count"])
+    if len(taught_not_demanded) < CURRICULUM_NEAR_ZERO_MIN_ROWS:
+        taught_not_demanded = []
 
     matched_course_ids = {cid for ids in skill_courses.values() for cid in ids}
 
