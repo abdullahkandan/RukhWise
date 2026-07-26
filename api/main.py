@@ -1089,10 +1089,16 @@ def postings_foreign_currency():
 # Extensible generator pattern: each _insight_* function takes
 # (postings, mentions, taxonomy) and returns either None ("not noteworthy
 # right now, don't show it") or a dict with headline/detail/value/
-# computed_at/audience plus an internal "score" used only for ranking --
-# score is stripped before the response goes out, since it's a ranking
-# mechanism, not part of the documented insight shape. Adding a new
-# insight later is just adding a function to _INSIGHT_GENERATORS.
+# computed_at/audience plus two internal-only fields, "score" (ranking)
+# and "sample_size" (sanity-gate input) -- both stripped before the
+# response goes out in _generate_insights, since neither is part of the
+# documented insight shape. Adding a new insight is: write the function,
+# declare its minimum sample size as a named _XXX_MIN_* constant, add it
+# to _INSIGHT_GENERATORS AND _INSIGHT_MIN_SAMPLE, and return "sample_size"
+# in the result. Skipping that last part isn't a silent bug -- the sanity
+# gate treats a missing sample_size as "not checked", not "checked and
+# fine", but every existing generator sets it, and a reviewer should
+# expect any new one to as well.
 #
 # audience is 'market' (a finding for someone looking for work -- shown on
 # the homepage) or 'system' (a finding about the pipeline/data itself --
@@ -1102,7 +1108,16 @@ def postings_foreign_currency():
 # the Rozee templated-tagset finding are both about data quality, not
 # market demand -- genuinely useful, just the wrong audience for a
 # homepage aimed at a job seeker who has never seen this site.
+#
+# Every generator's output, regardless of what it already checked
+# internally, passes through _insight_sanity_gate before publication --
+# see that function's own docstring for what it checks and why a second,
+# generator-agnostic layer exists at all instead of trusting each
+# generator's own logic.
 # --------------------------------------------------------------------------
+
+_TOP_MOVER_MIN_COMPLETE_WEEKS = 3  # fewer than this and the "previous" week could be the first, partial week
+
 
 def _insight_top_mover(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
     """(a) Skill with the biggest week-over-week posting-count change.
@@ -1131,7 +1146,7 @@ def _insight_top_mover(postings: list[dict], mentions: list[dict], taxonomy: dic
 
     week_of = {pid: d - timedelta(days=d.weekday()) for pid, d in dated}
     complete_weeks = sorted({w for w in week_of.values() if w < current_week_start})
-    if len(complete_weeks) < 3:
+    if len(complete_weeks) < _TOP_MOVER_MIN_COMPLETE_WEEKS:
         return None  # not enough complete weeks of history to trust a comparison
 
     last_week, prev_week = complete_weeks[-1], complete_weeks[-2]
@@ -1166,14 +1181,18 @@ def _insight_top_mover(postings: list[dict], mentions: list[dict], taxonomy: dic
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "audience": "market",
         "score": abs(delta),
+        "sample_size": len(complete_weeks),
     }
+
+
+_TEMPLATED_SHARE_MIN_POSTINGS = 5
 
 
 def _insight_templated_share(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
     """(b) Share of Rozee postings whose skill-tag block is an exact
     duplicate of another posting's -- evidence of templated listings."""
     rozee = [p for p in postings if p["source"] == "rozee"]
-    if len(rozee) < 5:
+    if len(rozee) < _TEMPLATED_SHARE_MIN_POSTINGS:
         return None
 
     posting_tagsets = {}
@@ -1206,7 +1225,12 @@ def _insight_templated_share(postings: list[dict], mentions: list[dict], taxonom
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "audience": "system",
         "score": share * 100,
+        "sample_size": total_tagged,
     }
+
+
+_LIFESPAN_MIN_DROPPED_POSTINGS = 5
+_LIFESPAN_MIN_CITY_SAMPLE = 3
 
 
 def _insight_posting_lifespan(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
@@ -1220,7 +1244,7 @@ def _insight_posting_lifespan(postings: list[dict], mentions: list[dict], taxono
     latest_run_id = latest_posting["scrape_run_id"]
 
     dropped = [p for p in dated if p["scrape_run_id"] != latest_run_id]
-    if len(dropped) < 5:
+    if len(dropped) < _LIFESPAN_MIN_DROPPED_POSTINGS:
         return None
 
     def lifespan_days(p: dict) -> float:
@@ -1228,22 +1252,20 @@ def _insight_posting_lifespan(postings: list[dict], mentions: list[dict], taxono
 
     overall_days = [lifespan_days(p) for p in dropped]
     overall_median = statistics.median(overall_days)
-    if overall_median < 1:
-        # Most "dropped" postings right now were seen in exactly one
-        # scrape run (first_seen_at == last_seen_at), which floors the
-        # median at 0 -- not a real "postings barely stay listed" finding,
-        # just the metric having no signal yet at current collection
-        # history/frequency. "About 0 days" reads as broken, not true;
-        # suppressed rather than shown, same reasoning as the thin-sample
-        # suppressions elsewhere in this file.
-        return None
+    # No bespoke "median < 1" guard here anymore -- most "dropped" postings
+    # right now were seen in exactly one scrape run (first_seen_at ==
+    # last_seen_at), which floors the median at 0, and a proxy threshold
+    # like this one is exactly the kind of ad-hoc, generator-local guard
+    # that individually missed cases before. The sanity gate's rendered-
+    # zero check (see _insight_sanity_gate) catches "about 0 days" more
+    # precisely -- against the actual displayed text, not a stand-in cutoff.
 
     by_city = defaultdict(list)
     for p in dropped:
         city = (p.get("city") or "").strip().title()
         if city:
             by_city[city].append(lifespan_days(p))
-    city_medians = {c: round(statistics.median(v), 2) for c, v in by_city.items() if len(v) >= 3}
+    city_medians = {c: round(statistics.median(v), 2) for c, v in by_city.items() if len(v) >= _LIFESPAN_MIN_CITY_SAMPLE}
 
     return {
         "headline": f"Job postings here typically stay listed for about {overall_median:.0f} days",
@@ -1259,7 +1281,12 @@ def _insight_posting_lifespan(postings: list[dict], mentions: list[dict], taxono
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "audience": "market",
         "score": overall_median,
+        "sample_size": len(dropped),
     }
+
+
+_DOMINANCE_MIN_SKILL_COUNT = 5  # minimum sample for either side of the ratio to mean anything
+_DOMINANCE_MIN_RATIO = 1.5
 
 
 def _insight_dominance_ratio(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
@@ -1276,7 +1303,7 @@ def _insight_dominance_ratio(postings: list[dict], mentions: list[dict], taxonom
         if not _is_substantive_skill(skill_key, taxonomy):
             continue
         count = len(skill_postings.get(skill_key, ()))
-        if count >= 5:  # minimum sample for the ratio to mean anything
+        if count >= _DOMINANCE_MIN_SKILL_COUNT:
             by_category[spec["category"]].append((skill_key, count))
 
     best = None  # (ratio, category, leader_key, leader_count, other_key, other_count)
@@ -1292,7 +1319,7 @@ def _insight_dominance_ratio(postings: list[dict], mentions: list[dict], taxonom
             if best is None or ratio > best[0]:
                 best = (ratio, cat, leader_key, leader_count, other_key, other_count)
 
-    if best is None or best[0] < 1.5:
+    if best is None or best[0] < _DOMINANCE_MIN_RATIO:
         return None
 
     ratio, cat, leader_key, leader_count, other_key, other_count = best
@@ -1318,13 +1345,17 @@ def _insight_dominance_ratio(postings: list[dict], mentions: list[dict], taxonom
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "audience": "market",
         "score": ratio,
+        "sample_size": other_count,
     }
+
+
+_FOREIGN_CURRENCY_MIN_COUNT = 1
 
 
 def _insight_foreign_currency(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
     """(e) Postings priced in a non-PKR currency, and what they are."""
     foreign = [p for p in postings if p.get("currency") and p["currency"] != "PKR"]
-    if not foreign:
+    if len(foreign) < _FOREIGN_CURRENCY_MIN_COUNT:
         return None
 
     breakdown = Counter(p["currency"] for p in foreign)
@@ -1349,7 +1380,11 @@ def _insight_foreign_currency(postings: list[dict], mentions: list[dict], taxono
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "audience": "system",
         "score": len(foreign),
+        "sample_size": len(foreign),
     }
+
+
+_ZERO_TECHNICAL_MIN_COUNT = 1
 
 
 def _insight_zero_technical(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
@@ -1365,9 +1400,9 @@ def _insight_zero_technical(postings: list[dict], mentions: list[dict], taxonomy
         m["posting_id"] for m in mentions if _is_substantive_skill(m["skill"], taxonomy)
     }
     zero_technical = sum(1 for p in postings if p["id"] not in substantive_posting_ids)
-    share = zero_technical / len(postings)
-    if share == 0:
+    if zero_technical < _ZERO_TECHNICAL_MIN_COUNT:
         return None
+    share = zero_technical / len(postings)
 
     return {
         "headline": f"{share * 100:.0f}% of postings don't list a specific skill requirement",
@@ -1379,6 +1414,7 @@ def _insight_zero_technical(postings: list[dict], mentions: list[dict], taxonomy
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "audience": "market",
         "score": share * 100,
+        "sample_size": zero_technical,
     }
 
 
@@ -1415,7 +1451,16 @@ def _insight_strongest_pairing(postings: list[dict], mentions: list[dict], taxon
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "audience": "market",
         "score": best["lift"],
+        "sample_size": best["joint_count"],
     }
+
+
+# Matches _MIN_JOINT_COUNT (the cooccurrence helper's own floor, which
+# already keeps thin pairs out of `pairs` before this function ever sees
+# them) -- declared again here, explicitly, so this generator's minimum
+# is self-documenting and independently checkable rather than an inherited
+# side effect of a different function's constant.
+_TOP_SKILL_COMPANION_MIN_JOINT_COUNT = _MIN_JOINT_COUNT
 
 
 def _insight_top_skill_companion(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
@@ -1440,6 +1485,8 @@ def _insight_top_skill_companion(postings: list[dict], mentions: list[dict], tax
         return None
 
     companion_skill, companion_display, p_given, joint = max(companions, key=lambda c: c[2])
+    if joint < _TOP_SKILL_COMPANION_MIN_JOINT_COUNT:
+        return None
     top_display = taxonomy["skills"][top_skill]["display"]
 
     return {
@@ -1457,6 +1504,7 @@ def _insight_top_skill_companion(postings: list[dict], mentions: list[dict], tax
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "audience": "market",
         "score": p_given * 100,
+        "sample_size": joint,
     }
 
 
@@ -1497,6 +1545,7 @@ def _insight_top_company(postings: list[dict], mentions: list[dict], taxonomy: d
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "audience": "market",
         "score": len(subset),
+        "sample_size": len(subset),
     }
 
 
@@ -1512,6 +1561,118 @@ _INSIGHT_GENERATORS = [
     _insight_zero_technical,
 ]
 
+# Every generator's declared minimum, keyed by function -- see each
+# generator's own _XXX_MIN_* constant. The sanity gate re-checks
+# insight["sample_size"] against this INDEPENDENTLY of whatever internal
+# threshold the generator itself already applied, on the theory that a
+# generator's own check is exactly the thing that has already been wrong:
+# three separate insight bugs shipped in one session (a 0-day median, an
+# 11-posting headline hirer, a bulk poster that passed a 25%-of-corpus
+# threshold at 22%) because each generator's own ad-hoc guard was the ONLY
+# check, and it individually missed a case every time. This registry is
+# what makes "every generator must declare its minimum as a named
+# constant" actually enforced, not just documented.
+_INSIGHT_MIN_SAMPLE = {
+    _insight_top_mover: _TOP_MOVER_MIN_COMPLETE_WEEKS,
+    _insight_templated_share: _TEMPLATED_SHARE_MIN_POSTINGS,
+    _insight_posting_lifespan: _LIFESPAN_MIN_DROPPED_POSTINGS,
+    _insight_dominance_ratio: _DOMINANCE_MIN_SKILL_COUNT,
+    _insight_foreign_currency: _FOREIGN_CURRENCY_MIN_COUNT,
+    _insight_strongest_pairing: _PAIRING_MIN_JOINT_COUNT,
+    _insight_top_skill_companion: _TOP_SKILL_COMPANION_MIN_JOINT_COUNT,
+    _insight_top_company: _TOP_COMPANY_MIN_POSTINGS,
+    _insight_zero_technical: _ZERO_TECHNICAL_MIN_COUNT,
+}
+
+_GATE_NUMERIC_TOKEN_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_GATE_PERCENT_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*%")
+_GATE_RATIO_LIKE_KEYS = ("ratio", "lift")
+
+
+def _insight_sanity_gate(insight: dict, min_sample: int) -> str | None:
+    """The last line of defense before an insight reaches a reader, applied
+    to every generator's output regardless of what that generator already
+    checked internally. Returns a short reason string if the insight
+    should be suppressed, or None if it clears every check:
+
+      1. Sample too thin: insight["sample_size"] below the generator's own
+         declared minimum (see _INSIGHT_MIN_SAMPLE).
+      2. Renders as zero: any numeral in the headline or detail text is
+         literally "0" (or "0.0", "0%", ...) at the precision actually
+         shown. "About 0 days" or "0 postings" is never publishable, even
+         if the true underlying value is a small positive number that
+         happened to round down -- see the posting-lifespan bug this gate
+         was built to catch, which lived in the HEADLINE, not the detail,
+         which is why both are scanned.
+      3. Percentage out of range: any "N%" in the rendered text with N
+         outside [0, 100].
+      4. Negative ratio/lift: any value-dict key naming a ratio-like
+         quantity (matched by substring, so "ratio", "runner_up_ratio",
+         "lift" all count) that's negative.
+
+    None of these trust the generator's own arithmetic -- they check the
+    OUTPUT, the same way the bugs that motivated this function were only
+    visible in the rendered text, not in isolated unit logic.
+    """
+    sample_size = insight.get("sample_size")
+    if sample_size is not None and sample_size < min_sample:
+        return f"sample_size={sample_size} below minimum {min_sample}"
+
+    rendered = f"{insight['headline']} {insight['detail']}"
+
+    for token in _GATE_NUMERIC_TOKEN_RE.findall(rendered):
+        if float(token) == 0.0:
+            return f"rendered text contains a zero-valued number ({token!r})"
+
+    for pct in _GATE_PERCENT_RE.findall(rendered):
+        pct_val = float(pct)
+        if pct_val > 100 or pct_val < 0:
+            return f"percentage {pct_val} outside [0, 100]"
+
+    for key, val in insight.get("value", {}).items():
+        if not isinstance(val, (int, float)) or isinstance(val, bool):
+            continue
+        if any(marker in key.lower() for marker in _GATE_RATIO_LIKE_KEYS) and val < 0:
+            return f"{key}={val} is negative"
+
+    return None
+
+
+def _generate_insights(postings: list[dict], mentions: list[dict], taxonomy: dict) -> tuple[list[dict], list[dict]]:
+    """Runs every generator, applies the sanity gate to each result, and
+    returns (published, suppressions). insights_live() only ever returns
+    `published` to API clients -- `suppressions` exists so the gate's
+    decisions are inspectable (directly, by calling this function, or via
+    the logger.info line below) rather than a card just silently not
+    appearing. Each suppression entry is {"generator": ..., "reason": ...}."""
+    results = []
+    suppressions: list[dict] = []
+    for gen in _INSIGHT_GENERATORS:
+        try:
+            result = gen(postings, mentions, taxonomy)
+        except Exception as exc:
+            logger.warning(f"Insight generator {gen.__name__} failed: {exc}")
+            suppressions.append({"generator": gen.__name__, "reason": f"exception: {exc}"})
+            continue
+        if result is None:
+            continue
+
+        reason = _insight_sanity_gate(result, _INSIGHT_MIN_SAMPLE[gen])
+        if reason is not None:
+            logger.info(f"Insight suppressed by sanity gate: generator={gen.__name__} reason={reason}")
+            suppressions.append({"generator": gen.__name__, "reason": reason})
+            continue
+
+        results.append(result)
+
+    results.sort(key=lambda r: -r["score"])
+    top = results[:6]
+    for r in top:
+        r.pop("score", None)
+        r.pop("sample_size", None)
+
+    return top, suppressions
+
 
 @app.get("/insights/live")
 @cached()
@@ -1520,21 +1681,7 @@ def insights_live():
     mentions = queries.get_skill_mentions()
     taxonomy = queries.get_taxonomy()
 
-    results = []
-    for gen in _INSIGHT_GENERATORS:
-        try:
-            result = gen(postings, mentions, taxonomy)
-        except Exception as exc:
-            logger.warning(f"Insight generator {gen.__name__} failed: {exc}")
-            continue
-        if result is not None:
-            results.append(result)
-
-    results.sort(key=lambda r: -r["score"])
-    top = results[:6]
-    for r in top:
-        r.pop("score", None)
-
+    top, _suppressions = _generate_insights(postings, mentions, taxonomy)
     return {"count": len(top), "insights": top}
 
 
