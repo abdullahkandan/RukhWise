@@ -41,6 +41,13 @@ Methodology is fixed by design, not reconfigurable via flags:
     sources" before Indeed/LinkedIn existed; narrowing it to
     AUTOMATED_SOURCES is what keeps that claim actually true now that a
     non-automated, staleness-prone source (LinkedIn) is in the corpus.
+  - Skill target SELECTION (which 12 skills get a forecast row at all) is
+    further restricted to substantive market skills: requirement_type ==
+    'skill' (excludes attributes like on_site/morning_shift and
+    languages) and category not in SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES
+    (soft, office_admin -- near-universal, low-signal). Identical filter
+    to briefing.py's top-5, imported from here so the two can never
+    disagree about what counts as a market skill (see _is_market_skill).
   - model trailing_mean_3w_v1: predicted = mean of the last <=3 complete
     weeks' counts for that target (fewer if less history exists, minimum
     1 -- model_version gets a '_shorthist' suffix when so). baseline =
@@ -48,11 +55,16 @@ Methodology is fixed by design, not reconfigurable via flags:
     +/- 1.5 * stddev of the last <=4 complete weeks' counts (sample
     stdev; 0 spread with only 1 data point), floored at 0 on the low end.
   - "Complete weeks exist" only from the week containing that target
-    universe's earliest postings.first_seen_at onward -- weeks entirely
-    before collection began are never queried as zero-count history, since
-    that would fabricate history the collector was never running to
-    observe. Mustakbil-only volume and AUTOMATED_SOURCES skills therefore
-    each get their own earliest-week floor.
+    universe's earliest postings.first_seen_at onward, clipped so no week
+    before AUTOMATED_COLLECTION_START is ever included either -- weeks
+    entirely before collection began are never queried as zero-count
+    history (that would fabricate history the collector was never running
+    to observe), and neither is Mustakbil's one-time 2026-07-11/07-12 bulk
+    backfill week, which is real history but not steady-state collection:
+    averaging it into a trailing mean measures the instrumentation event
+    of onboarding a source, not market movement. Mustakbil-only volume and
+    AUTOMATED_SOURCES skills each get their own earliest-week floor, both
+    further clipped to AUTOMATED_COLLECTION_START.
 """
 
 from __future__ import annotations
@@ -64,11 +76,15 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).parent / "rukhwise_scraper"))
 
 from config import setup_logging  # noqa: E402
 
 logger = setup_logging()
+
+from extract_skills import TAXONOMY_PATH  # noqa: E402
 
 PKT = timezone(timedelta(hours=5))
 BULK_COMPANY_KEY = "naseeb enterprise inc"  # normalized: whitespace-collapsed, casefolded
@@ -89,11 +105,42 @@ AUTOMATED_SOURCES = ("mustakbil", "indeed")
 # disagree about what a week's volume means, even if AUTOMATED_SOURCES
 # itself changes later.
 VOLUME_SOURCE = "mustakbil"
+
+# The Mustakbil collector's first two days (2026-07-11 -- 07-12 PKT) were a
+# one-time bulk backfill/enrichment pass: 261 postings landed in under 36
+# hours, against a steady 1-9/day from 2026-07-13 onward once daily
+# automated collection actually began (per-week/per-source counts:
+# 2026-07-06 week=261, 2026-07-13 week=14, 2026-07-20 week=19 -- the first
+# week is entirely the backfill, not a comparable steady-state week). A
+# trailing-mean or naive-baseline window that includes the backfill week
+# measures the instrumentation event of onboarding a source, not market
+# movement. This is the floor every history window (mean, interval, and
+# briefing.py's own volume comparison) is clipped to, in addition to each
+# target's own earliest-postings floor -- see run_predict() and
+# briefing.py's compute_facts().
+AUTOMATED_COLLECTION_START = datetime(2026, 7, 13, tzinfo=PKT)
+
 TOP_SKILLS_COUNT = 12
 MEAN_WINDOW_WEEKS = 3
 INTERVAL_WINDOW_WEEKS = 4
 INTERVAL_MULTIPLIER = 1.5
 MODEL_NAME = "trailing_mean_3w_v1"
+
+# Same substantive-skill exclusion briefing.py's top-5 ranking applies (see
+# that module's TOP_SKILLS_EXCLUDED_CATEGORIES comment, before it moved
+# here): soft skills are near-universal and low-signal; office_admin
+# likewise. Combined with requirement_type == 'skill' in _is_market_skill
+# below, this also drops attributes (on_site, morning_shift) and languages,
+# which aren't skills at all. Owned here, not in briefing.py, so this
+# module's own top-12 target selection can apply it too -- briefing.py
+# imports both this and _is_market_skill instead of redefining them, which
+# is what makes it structurally impossible for the two to disagree about
+# what counts as a market skill (a soft skill like Communication showing up
+# as a forecast target while already excluded from the briefing's top-5 was
+# exactly this disagreement, caused by forecast.py never having this filter
+# at all).
+TAXONOMY_VERSION = "taxonomy_v3"
+SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES = frozenset({"soft", "office_admin"})
 
 
 # --------------------------------------------------------------------------
@@ -159,6 +206,40 @@ def _weeks_history(
         w -= timedelta(days=7)
     weeks.reverse()
     return weeks
+
+
+def _collection_start_week() -> datetime:
+    """AUTOMATED_COLLECTION_START floored to its own PKT week-start (a
+    no-op today, since that date is itself a Monday, but computed rather
+    than assumed in case the constant ever moves)."""
+    return _week_start(AUTOMATED_COLLECTION_START)
+
+
+# --------------------------------------------------------------------------
+# Taxonomy scoping -- target/ranking selection only, never grading (an
+# already-logged forecast's actual must be computed against the same
+# population it was predicted against, not today's substantive-skill
+# definition -- see run_grade()'s own comment on source_scope for the same
+# principle applied to sources).
+# --------------------------------------------------------------------------
+
+def _load_taxonomy() -> dict:
+    with open(TAXONOMY_PATH, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def _is_market_skill(skill_key: str, taxonomy: dict) -> bool:
+    """True for a substantive, demand-side skill -- see
+    SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES' comment above for the exact
+    rule. A plain function taking taxonomy explicitly (not a closure) so
+    briefing.py can import and call it directly instead of redefining an
+    equivalent closure of its own."""
+    spec = taxonomy["skills"].get(skill_key)
+    if not spec:
+        return False
+    if spec.get("requirement_type", "skill") != "skill":
+        return False
+    return spec.get("category") not in SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES
 
 
 # --------------------------------------------------------------------------
@@ -283,6 +364,18 @@ def run_predict() -> list[dict]:
         logger.error("No postings found -- refusing to predict with zero history")
         return []
 
+    # Target SELECTION only (which skills are even eligible to become a
+    # forecast row) -- restricted to the current taxonomy pass and to
+    # substantive market skills, same filter briefing.py's top-5 applies.
+    # Never applied in run_grade(): an already-logged row must be graded
+    # against exactly the population it was predicted against, not today's
+    # definition of "substantive" (see that function's own comment).
+    taxonomy = _load_taxonomy()
+    mentions = [
+        m for m in mentions
+        if m.get("extraction_method") == TAXONOMY_VERSION and _is_market_skill(m["skill"], taxonomy)
+    ]
+
     postings_index = {p["id"]: p for p in postings}
     # Skill targets only ever look at AUTOMATED_SOURCES postings -- see the
     # module docstring and AUTOMATED_SOURCES' own comment. Passing this
@@ -294,13 +387,19 @@ def run_predict() -> list[dict]:
         pid: p for pid, p in postings_index.items() if p.get("source") in AUTOMATED_SOURCES
     }
 
+    collection_start_week = _collection_start_week()
+
     mustakbil_postings = [p for p in postings if p.get("source") == VOLUME_SOURCE]
     if not mustakbil_postings:
         logger.error("No Mustakbil postings found -- cannot build the volume/all target")
         volume_mean_weeks: list[datetime] = []
     else:
         mustakbil_earliest = min(_parse_ts(p["first_seen_at"]) for p in mustakbil_postings)
-        mustakbil_earliest_week = _week_start(mustakbil_earliest)
+        # Floored to whichever is LATER of (a) this target's own earliest
+        # posting and (b) AUTOMATED_COLLECTION_START -- (b) is what excludes
+        # the one-time bulk backfill week even though it genuinely is
+        # mustakbil_postings' earliest week.
+        mustakbil_earliest_week = max(_week_start(mustakbil_earliest), collection_start_week)
         volume_mean_weeks = _weeks_history(complete_week_start, MEAN_WINDOW_WEEKS, mustakbil_earliest_week)
         volume_interval_weeks = _weeks_history(complete_week_start, INTERVAL_WINDOW_WEEKS, mustakbil_earliest_week)
 
@@ -311,7 +410,7 @@ def run_predict() -> list[dict]:
         skill_interval_weeks: list[datetime] = []
     else:
         automated_earliest = min(_parse_ts(p["first_seen_at"]) for p in automated_postings)
-        automated_earliest_week = _week_start(automated_earliest)
+        automated_earliest_week = max(_week_start(automated_earliest), collection_start_week)
         skill_mean_weeks = _weeks_history(complete_week_start, MEAN_WINDOW_WEEKS, automated_earliest_week)
         skill_interval_weeks = _weeks_history(complete_week_start, INTERVAL_WINDOW_WEEKS, automated_earliest_week)
 

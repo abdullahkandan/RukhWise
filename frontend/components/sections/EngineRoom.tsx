@@ -106,6 +106,12 @@ function PendingRow({ forecast, index }: { forecast: PendingForecast; index: num
       <p className="mt-1 font-mono text-xs text-cream/40">
         logged {relativeTime(forecast.created_at)} · for the week of {forecast.target_week_start}
       </p>
+      {forecast.collection_regime_note && (
+        <p className="mt-1 font-mono text-xs uppercase tracking-[0.08em] text-sceptre-bright/90">
+          Computed across a collection-cadence change (initial bulk backfill vs. daily
+          collection) -- its error reflects that, not forecast skill.
+        </p>
+      )}
     </ScrollReveal>
   );
 }
@@ -146,6 +152,12 @@ function GradedRow({ forecast, index }: { forecast: GradedForecast; index: numbe
       <p className="font-mono text-xs text-java/40">
         <span className="text-java/35">scope </span>{formatSourceScope(forecast.source_scope)}
       </p>
+      {forecast.collection_regime_note && (
+        <p className="col-span-2 mt-1 font-mono text-xs uppercase tracking-[0.08em] text-sceptre-bright sm:col-span-full">
+          Computed across a collection-cadence change (initial bulk backfill vs. daily
+          collection) -- its error reflects that, not forecast skill.
+        </p>
+      )}
     </ScrollReveal>
   );
 }

@@ -481,6 +481,10 @@ export interface PendingForecast {
   created_at: string;
   run_id: string;
   source_scope: string | null;
+  /** True for a batch predicted before forecast.py's AUTOMATED_COLLECTION_START
+   * fix, whose trailing-mean history included Mustakbil's one-time bulk
+   * backfill week -- see api/main.py's COLLECTION_REGIME_CONTAMINATED_WEEKS. */
+  collection_regime_note: boolean;
 }
 
 export interface ForecastsPendingResponse {
@@ -515,6 +519,10 @@ export interface GradedForecast {
   pct_error: number | null;
   graded_at: string;
   source_scope: string | null;
+  /** Same annotation PendingForecast carries -- persists once a
+   * contaminated batch is graded, since "their errors reflect that, not
+   * forecast skill" applies just as much after grading as before. */
+  collection_regime_note: boolean;
 }
 
 export interface ForecastOutcomeCounts {

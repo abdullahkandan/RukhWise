@@ -51,36 +51,27 @@ from config import setup_logging  # noqa: E402
 logger = setup_logging()
 
 from forecast import (  # noqa: E402
+    AUTOMATED_COLLECTION_START,
     AUTOMATED_SOURCES,
     BULK_COMPANY_KEY,
+    SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES,
+    TAXONOMY_VERSION,
     VOLUME_SOURCE,
     _complete_week_start,
     _count_in_week,
+    _is_market_skill,
+    _load_taxonomy,
     _next_week_start,
     _normalize_company,
     _parse_ts,
     _week_label,
+    _week_start,
 )
-from extract_skills import TAXONOMY_PATH  # noqa: E402
 
 SOURCE_DISPLAY = {"mustakbil": "Mustakbil", "indeed": "Indeed"}
-# This script's own taxonomy-version scoping constant -- mirrors why
-# curriculum.py / api/queries.py's ACTIVE_TAXONOMY each own their own
-# scoping rather than importing one shared constant across packages: api/
-# and the root-level scripts are deliberately independent dependency
-# surfaces. Bump this alongside api/queries.py's ACTIVE_TAXONOMY if the
-# live taxonomy pass ever changes.
-TAXONOMY_VERSION = "taxonomy_v3"
 
 TOP_SKILLS_LIMIT = 5
 TOP_SKILLS_COMPARISON_LIMIT = 10
-# Same exclusion this project applies everywhere a skill ranking is meant
-# to be substantive (see api/main.py's CURRICULUM_GAP_EXCLUDED_CATEGORIES):
-# soft skills are near-universal and low-signal; office_admin likewise.
-# Combined with requirement_type == 'skill' (see _is_market_skill in
-# compute_facts), this also drops attributes (on_site, morning_shift) and
-# languages, which aren't skills at all.
-TOP_SKILLS_EXCLUDED_CATEGORIES = frozenset({"soft", "office_admin"})
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -97,11 +88,6 @@ BANNED_PHRASES = [
 ]
 
 
-def _load_taxonomy() -> dict:
-    with open(TAXONOMY_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
 def _target_display(target_type: str, target_key: str, taxonomy: dict) -> str:
     if target_type == "volume":
         return "All postings (Mustakbil)"
@@ -111,9 +97,9 @@ def _target_display(target_type: str, target_key: str, taxonomy: dict) -> str:
 
 def _outcome(abs_error: float, baseline_abs_error: float) -> str:
     """beat/tie/lost -- same three-way derivation as api/main.py's
-    _forecast_outcome (duplicated here, not imported: this script and the
-    api/ package are deliberately separate dependency surfaces, see
-    TAXONOMY_VERSION's comment above)."""
+    _forecast_outcome (duplicated here, not imported: api/ and the
+    root-level scripts are deliberately independent dependency surfaces,
+    same reasoning curriculum.py's own ACTIVE_TAXONOMY scoping follows)."""
     if abs_error < baseline_abs_error:
         return "beat"
     if abs_error > baseline_abs_error:
@@ -240,10 +226,27 @@ def compute_facts(now_utc: datetime | None = None) -> dict:
     volume_postings = [p for p in postings if p.get("source") == VOLUME_SOURCE]
     last_week_volume = _count_in_week(volume_postings, last_week_start)
     prior_week_volume = _count_in_week(volume_postings, prior_week_start)
-    volume_change = last_week_volume - prior_week_volume
-    volume_change_pct = (
-        round(volume_change / prior_week_volume * 100, 1) if prior_week_volume else None
+
+    # A week-over-week comparison is only meaningful if BOTH weeks are
+    # steady-state collection -- see AUTOMATED_COLLECTION_START's own
+    # comment in forecast.py. prior_week_start is checked explicitly even
+    # though it's always the earlier of the two (last_week_start >=
+    # prior_week_start by construction): this is the actual guard, not an
+    # optimization, so it stays legible as its own condition rather than
+    # relying on that ordering fact holding forever.
+    collection_start_week = _week_start(AUTOMATED_COLLECTION_START)
+    comparison_available = (
+        prior_week_start >= collection_start_week and last_week_start >= collection_start_week
     )
+
+    if comparison_available:
+        volume_change = last_week_volume - prior_week_volume
+        volume_change_pct = (
+            round(volume_change / prior_week_volume * 100, 1) if prior_week_volume else None
+        )
+    else:
+        volume_change = None
+        volume_change_pct = None
 
     # ---- top skills by distinct-company count, automated sources only -----
     # (LinkedIn's first_seen_at is not a trustworthy recency signal -- see
@@ -257,23 +260,17 @@ def compute_facts(now_utc: datetime | None = None) -> dict:
     # attributes (on_site, morning_shift: a workplace ARRANGEMENT, not a
     # skill) and languages; category excludes soft/office_admin (near-
     # universal, low-signal). Same two-part filter api/main.py's curriculum
-    # endpoints apply (_is_teachable_skill there) -- a "top skills" list
-    # that leads with On-Site and Communication is a taxonomy-matching
-    # artifact, not a market finding.
+    # endpoints apply (_is_teachable_skill there), and the same
+    # _is_market_skill this module imports from forecast.py, which applies
+    # it to its own top-12 target selection too -- a "top skills" list (or
+    # forecast target) that leads with On-Site and Communication is a
+    # taxonomy-matching artifact, not a market finding.
     automated_postings = [p for p in postings if p.get("source") in AUTOMATED_SOURCES]
     automated_index = {p["id"]: p for p in automated_postings}
 
-    def _is_market_skill(skill_key: str) -> bool:
-        spec = taxonomy["skills"].get(skill_key)
-        if not spec:
-            return False
-        if spec.get("requirement_type", "skill") != "skill":
-            return False
-        return spec.get("category") not in TOP_SKILLS_EXCLUDED_CATEGORIES
-
     mentions = [
         m for m in get_skill_mentions_for_briefing()
-        if m.get("extraction_method") == TAXONOMY_VERSION and _is_market_skill(m["skill"])
+        if m.get("extraction_method") == TAXONOMY_VERSION and _is_market_skill(m["skill"], taxonomy)
     ]
 
     last_week_skill_counts = _skill_company_counts_in_week(mentions, automated_index, last_week_start)
@@ -321,11 +318,16 @@ def compute_facts(now_utc: datetime | None = None) -> dict:
         "posting_volume": {
             "sources": [SOURCE_DISPLAY.get(VOLUME_SOURCE, VOLUME_SOURCE)],
             "last_week_label": last_week_label,
-            "prior_week_label": prior_week_label,
+            "prior_week_label": prior_week_label if comparison_available else None,
             "last_week": last_week_volume,
-            "prior_week": prior_week_volume,
+            "prior_week": prior_week_volume if comparison_available else None,
             "change": volume_change,
             "change_pct": volume_change_pct,
+            "comparison_available": comparison_available,
+            "comparison_unavailable_reason": (
+                None if comparison_available
+                else "collection cadence changed after an initial bulk backfill; the prior week is not comparable"
+            ),
         },
         "top_skills": {
             "week": last_week_label,
@@ -560,7 +562,13 @@ def build_template_briefing(facts: dict) -> str:
     )
 
     sources_str = " and ".join(vol["sources"])
-    if vol["prior_week"]:
+    if not vol.get("comparison_available", True):
+        parts.append(
+            f"Posting volume from {sources_str} was {vol['last_week']} last week. A "
+            f"week-over-week comparison is not available because collection cadence changed "
+            f"after an initial bulk backfill."
+        )
+    elif vol["prior_week"] is not None:
         direction = "up from" if vol["change"] > 0 else "down from" if vol["change"] < 0 else "unchanged from"
         parts.append(
             f"Posting volume from {sources_str} was {vol['last_week']} last week, {direction} "

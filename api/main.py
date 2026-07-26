@@ -1489,6 +1489,20 @@ def _forecast_display(target_type: str, target_key: str, taxonomy: dict) -> str:
     return spec["display"] if spec else target_key
 
 
+# Forecast batches logged BEFORE forecast.py's AUTOMATED_COLLECTION_START
+# fix, whose trailing-mean/baseline history was contaminated by Mustakbil's
+# one-time 2026-07-11/07-12 bulk backfill week -- confirmed by direct
+# recomputation, not inference: the 2026-07-20 batch's entire history was
+# that single backfill week (predicted == baseline == 261 for volume/all,
+# since a 1-week trailing mean equals its only input), and the 2026-07-27
+# batch's mean averaged the backfill week (261) with the first steady week
+# (14), producing predicted=137.5 against baseline=14. Both batches are
+# immutable rows (already logged, graded or not) and stay exactly as
+# published -- this is a read-only annotation surfaced alongside them, not
+# a correction. Forecasts logged after the fix are not in this set.
+COLLECTION_REGIME_CONTAMINATED_WEEKS = frozenset({"2026-07-20", "2026-07-27"})
+
+
 @app.get("/forecasts/pending")
 @cached()
 def forecasts_pending():
@@ -1513,6 +1527,7 @@ def forecasts_pending():
             "created_at": f["created_at"],
             "run_id": f["run_id"],
             "source_scope": f.get("source_scope"),
+            "collection_regime_note": f["target_week_start"] in COLLECTION_REGIME_CONTAMINATED_WEEKS,
         }
         for f in pending
     ]
@@ -1569,6 +1584,7 @@ def forecasts_accuracy():
             "pct_error": pct_error,
             "graded_at": f["graded_at"],
             "source_scope": f.get("source_scope"),
+            "collection_regime_note": f["target_week_start"] in COLLECTION_REGIME_CONTAMINATED_WEEKS,
         })
 
     count_graded = len(graded)

@@ -971,14 +971,20 @@ def get_postings_for_drift() -> list[dict]:
 
 
 def get_skill_mentions_for_forecast() -> list[dict]:
-    """posting_id, skill for every skill_mentions row."""
+    """posting_id, skill, extraction_method for every skill_mentions row.
+    extraction_method is used by forecast.py's run_predict() (target
+    SELECTION only, filtered to TAXONOMY_VERSION there) -- run_grade() and
+    backtest.py ignore it and use every row regardless of taxonomy pass,
+    since an already-logged target's actual must be counted against
+    exactly the population it was predicted against, not today's active
+    taxonomy."""
     client = _get_client()
     rows = []
     offset = 0
     while True:
         res = (
             client.table("skill_mentions")
-            .select("posting_id,skill")
+            .select("posting_id,skill,extraction_method")
             .range(offset, offset + _QUERY_PAGE_SIZE - 1)
             .execute()
         )
