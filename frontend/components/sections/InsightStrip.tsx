@@ -24,7 +24,10 @@ function InsightCard({
   foreignCurrencyBreakout?: ForeignCurrencyBreakoutEntry[];
 }) {
   const { tone, bigNumber } = classifyInsight(insight);
-  const numberColor = tone === "alert" ? "text-sceptre-bright" : "text-cerulean";
+  // Red (sceptre-bright) is reserved for cream backgrounds -- this card sits
+  // on bg-soil (dark), where it fails contrast. Cream itself carries the
+  // "alert" distinction here; cerulean stays the neutral-tone color.
+  const numberColor = tone === "alert" ? "text-cream" : "text-cerulean";
   const showBreakout = isForeignCurrencyInsight(insight) && (foreignCurrencyBreakout?.length ?? 0) > 0;
 
   return (

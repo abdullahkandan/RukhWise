@@ -42,6 +42,19 @@ export function titleCaseCity(city: string): string {
     .join(" ");
 }
 
+/** "mustakbil,rozee" -> "Mustakbil + Rozee". Shared by the forecast and
+ * backtest panels on /engine -- both surface the same raw comma-joined
+ * source-key string from the API. */
+export function formatSourceScope(scope: string | null): string {
+  if (!scope) return "—";
+  return scope
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join(" + ");
+}
+
 export function formatBucketLabel(bucket: string, granularity: string): string {
   const date = new Date(bucket);
   if (granularity === "day") {

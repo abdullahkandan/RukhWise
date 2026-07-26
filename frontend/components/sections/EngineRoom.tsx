@@ -5,17 +5,17 @@ import {
   getForecastsPending,
   getSystemHealth,
   type BacktestSummaryResponse,
-  type BacktestTargetSummary,
   type BriefingsLatestResponse,
   type ForecastsAccuracyResponse,
   type ForecastsPendingResponse,
   type GradedForecast,
-  type PendingForecast,
   type SystemHealth,
 } from "@/lib/api";
-import { formatPercent, relativeTime } from "@/lib/format";
+import { formatPercent, formatSourceScope, relativeTime } from "@/lib/format";
 import { ScrollReveal } from "../ScrollReveal";
 import { SectionDivider } from "../SectionDivider";
+import { PendingForecasts } from "./PendingForecasts";
+import { BacktestPanel } from "./BacktestPanel";
 
 const FORECASTS_EMPTY_COPY = "First forecasts logged July 18, 2026. First grades arrive July 27.";
 const BRIEFING_EMPTY_COPY = "The first weekly briefing publishes after the first grading run, July 27, 2026.";
@@ -91,43 +91,12 @@ function CoverageBar({ label, value }: { label: string; value: number | null }) 
   );
 }
 
-function PendingRow({ forecast, index }: { forecast: PendingForecast; index: number }) {
+// No ScrollReveal here -- see the "PENDING / GRADED LOG" render site below
+// for why individual rows in a dense data table don't get their own
+// viewport-gated entrance anymore.
+function GradedRow({ forecast }: { forecast: GradedForecast }) {
   return (
-    <ScrollReveal index={index} staggerMs={60} className="border-t border-cream/15 py-4 first:border-t-0">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <p className="font-sans text-sm text-cream/90">{forecast.display}</p>
-        <p className="font-mono text-sm tabular-nums text-cream/90">
-          {forecast.predicted.toFixed(1)}{" "}
-          <span className="text-cream/45">
-            [{forecast.interval_low.toFixed(1)}–{forecast.interval_high.toFixed(1)}]
-          </span>
-        </p>
-      </div>
-      <p className="mt-1 font-mono text-xs text-cream/40">
-        logged {relativeTime(forecast.created_at)} · for the week of {forecast.target_week_start}
-      </p>
-      {forecast.collection_regime_note && (
-        <p className="mt-1 font-mono text-xs uppercase tracking-[0.08em] text-sceptre-bright/90">
-          Computed across a collection-cadence change (initial bulk backfill vs. daily
-          collection) -- its error reflects that, not forecast skill.
-        </p>
-      )}
-    </ScrollReveal>
-  );
-}
-
-function formatSourceScope(scope: string | null): string {
-  if (!scope) return "—";
-  return scope.split(",").map((s) => s.trim()).filter(Boolean).join(" + ");
-}
-
-function GradedRow({ forecast, index }: { forecast: GradedForecast; index: number }) {
-  return (
-    <ScrollReveal
-      index={index}
-      staggerMs={60}
-      className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-java/15 py-4 first:border-t-0 sm:grid-cols-[1.3fr_1fr_1fr_1fr_1fr_1.2fr]"
-    >
+    <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-java/15 py-4 first:border-t-0 sm:grid-cols-[1.3fr_1fr_1fr_1fr_1fr_1.2fr]">
       <p className="col-span-2 font-sans text-sm text-java/90 sm:col-span-1">{forecast.display}</p>
       <p className="font-mono text-xs tabular-nums text-java/50">
         <span className="text-java/35">pred </span>{forecast.predicted.toFixed(1)}
@@ -152,13 +121,7 @@ function GradedRow({ forecast, index }: { forecast: GradedForecast; index: numbe
       <p className="font-mono text-xs text-java/40">
         <span className="text-java/35">scope </span>{formatSourceScope(forecast.source_scope)}
       </p>
-      {forecast.collection_regime_note && (
-        <p className="col-span-2 mt-1 font-mono text-xs uppercase tracking-[0.08em] text-sceptre-bright sm:col-span-full">
-          Computed across a collection-cadence change (initial bulk backfill vs. daily
-          collection) -- its error reflects that, not forecast skill.
-        </p>
-      )}
-    </ScrollReveal>
+    </div>
   );
 }
 
@@ -220,33 +183,6 @@ function BriefingPanel({ briefing, index }: { briefing: BriefingsLatestResponse;
       ) : (
         <p className="mt-4 font-sans text-sm text-java/60">{BRIEFING_EMPTY_COPY}</p>
       )}
-    </ScrollReveal>
-  );
-}
-
-function BacktestTargetRow({ target, index }: { target: BacktestTargetSummary; index: number }) {
-  return (
-    <ScrollReveal
-      index={index}
-      staggerMs={60}
-      className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-dashed border-cerulean/30 py-4 first:border-t-0 sm:grid-cols-[1.3fr_1fr_1fr_1fr_1fr_1fr]"
-    >
-      <p className="col-span-2 font-sans text-sm text-java/90 sm:col-span-1">{target.display}</p>
-      <p className="font-mono text-xs tabular-nums text-java/50">
-        <span className="text-java/35">n </span>{target.n}
-      </p>
-      <p className="font-mono text-xs tabular-nums text-java/50">
-        <span className="text-java/35">mae </span>{target.mae !== null ? target.mae.toFixed(2) : "—"}
-      </p>
-      <p className="font-mono text-xs tabular-nums text-sceptre-bright">
-        <span className="text-java/35">beat </span>{target.beat}
-      </p>
-      <p className="font-mono text-xs tabular-nums text-java/45">
-        <span className="text-java/35">tie </span>{target.tie}
-      </p>
-      <p className="font-mono text-xs tabular-nums text-java/35">
-        <span className="text-java/35">lost </span>{target.lost}
-      </p>
     </ScrollReveal>
   );
 }
@@ -347,7 +283,9 @@ export async function EngineRoom() {
 
         {/* PENDING -- this week's predictions, logged and waiting to be
             checked against reality. Soil panel, matching the register the
-            "Forecasts" placeholder used before real forecasting existed. */}
+            "Forecasts" placeholder used before real forecasting existed.
+            Individual rows are plain (no ScrollReveal) -- see PendingForecasts;
+            this outer panel keeps the one entrance animation for the section. */}
         <ScrollReveal
           index={sources.length + 4}
           staggerMs={70}
@@ -359,11 +297,7 @@ export async function EngineRoom() {
           </h3>
 
           {pending.forecasts.length > 0 ? (
-            <div className="mt-6">
-              {pending.forecasts.map((f, i) => (
-                <PendingRow key={`${f.target_type}-${f.target_key}-${f.target_week_start}`} forecast={f} index={i} />
-              ))}
-            </div>
+            <PendingForecasts forecasts={pending.forecasts} count={pending.count} />
           ) : (
             <p className="mt-4 font-sans text-sm text-cream/60">{FORECASTS_EMPTY_COPY}</p>
           )}
@@ -401,8 +335,16 @@ export async function EngineRoom() {
 
           {accuracy.forecasts.length > 0 ? (
             <div className="mt-6">
-              {accuracy.forecasts.map((f, i) => (
-                <GradedRow key={`${f.target_type}-${f.target_key}-${f.target_week_start}`} forecast={f} index={i} />
+              {/* Same collection-regime disclosure as Pending, once for the
+                  whole list rather than repeated per matching row. */}
+              {accuracy.forecasts.some((f) => f.collection_regime_note) && (
+                <p className="mb-4 font-mono text-xs uppercase tracking-[0.08em] text-sceptre-bright">
+                  Some of these were computed across a collection-cadence change (initial bulk backfill
+                  vs. daily collection) — their error reflects that, not forecast skill.
+                </p>
+              )}
+              {accuracy.forecasts.map((f) => (
+                <GradedRow key={`${f.target_type}-${f.target_key}-${f.target_week_start}`} forecast={f} />
               ))}
             </div>
           ) : (
@@ -443,34 +385,7 @@ export async function EngineRoom() {
           </p>
 
           {backtest.n_rows > 0 ? (
-            <>
-              <div className="mt-6 flex flex-wrap items-end justify-between gap-6 border-t border-dashed border-cerulean/30 pt-6">
-                <div>
-                  <p className="font-mono text-xs uppercase tracking-widest text-java/50">
-                    {backtest.n_weeks} week{backtest.n_weeks === 1 ? "" : "s"} backtested
-                  </p>
-                  <p className="mt-1 font-mono text-xs text-java/40">
-                    source_scope {backtest.source_scope ?? "—"}
-                  </p>
-                </div>
-                {backtest.overall.beat_rate !== null && (
-                  <div className="text-right">
-                    <p className="font-mono text-4xl font-semibold tabular-nums text-cerulean">
-                      {formatPercent(backtest.overall.beat_rate)}
-                    </p>
-                    <p className="font-mono text-xs uppercase tracking-widest text-java/50">
-                      beat baseline (retrospective)
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-2">
-                {backtest.by_target.map((t, i) => (
-                  <BacktestTargetRow key={`${t.target_type}-${t.target_key}`} target={t} index={i} />
-                ))}
-              </div>
-            </>
+            <BacktestPanel backtest={backtest} />
           ) : (
             <p className="mt-6 font-sans text-sm text-java/60">
               No backtest computed yet — run <code>python backtest.py</code> once Mustakbil has at
