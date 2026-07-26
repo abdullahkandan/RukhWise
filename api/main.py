@@ -835,12 +835,28 @@ def coverage(payload: CoverageRequest, exclude_bulk: bool = False):
     user_skills = {s for s in payload.skills if skills_meta[s]["category"] != "soft"}
     ignored_soft = sorted(set(payload.skills) - user_skills)
 
+    # Workplace attributes (on-site, night shift, full-time), credentials and
+    # languages are requirement_type != "skill". They are real things postings
+    # ask for, but they are not things a person LEARNS -- and this endpoint's
+    # entire output is learning advice. Leaving them in did two visible kinds
+    # of damage: the delta ranking recommended "learn On-Site next" above every
+    # genuine skill (it is near-universal, so it always won on raw count), and
+    # they inflated the denominator of every posting's requirement set, so
+    # covering the actual technical asks still failed the 70% bar. Filtered
+    # with the same predicate _build_curriculum_alignment already uses for the
+    # same reason -- a curriculum can't teach an attribute either.
+    user_skills = {s for s in user_skills if _has_skill_requirement_type(s, taxonomy)}
+    ignored_non_skill = sorted(set(payload.skills) - user_skills - set(ignored_soft))
+
     postings = queries.get_postings()
     mentions = queries.get_skill_mentions()
     postings, mentions = _apply_bulk_exclusion(postings, mentions, exclude_bulk)
     postings_by_id = {p["id"]: p for p in postings}
 
-    posting_skills = _posting_skills_map(mentions, taxonomy, include_soft=False)
+    posting_skills = {
+        pid: {s for s in skills if _has_skill_requirement_type(s, taxonomy)}
+        for pid, skills in _posting_skills_map(mentions, taxonomy, include_soft=False).items()
+    }
 
     # Denominator: postings with at least one recognized technical skill
     # mention. A posting with zero technical mentions has no match-strength
@@ -903,6 +919,7 @@ def coverage(payload: CoverageRequest, exclude_bulk: bool = False):
     return {
         "input_skills": sorted(user_skills),
         "ignored_soft_skills": ignored_soft,
+        "ignored_non_skill_requirements": ignored_non_skill,
         "exclude_bulk": exclude_bulk,
         "total_postings_considered": total,
         "strong_matches": {
@@ -928,7 +945,11 @@ def coverage(payload: CoverageRequest, exclude_bulk: bool = False):
             "most recent first, out of the true count above. Postings with "
             "zero recognized technical skill mentions are excluded from the "
             "denominator entirely -- they have no match-strength question "
-            "to answer. The delta ranking simulates learning exactly one "
+            "to answer. Workplace attributes (on-site, shift, full-time), "
+            "credentials and languages are excluded from both your skill set "
+            "and each posting's requirement set: they are not things a person "
+            "learns, and this endpoint's whole output is learning advice. "
+            "The delta ranking simulates learning exactly one "
             "more skill at a time: for each candidate not already in your "
             "set, it counts postings currently below the 70% threshold that "
             "would cross it the moment you learned that one skill. "
