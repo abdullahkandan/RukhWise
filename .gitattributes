@@ -1,0 +1,20 @@
+# Normalize line endings on checkin regardless of each contributor's
+# core.autocrlf, then pin source files to LF explicitly. Without this,
+# core.autocrlf=true with no .gitattributes lets `git apply --cached` (and
+# other index-writing paths that bypass the checkout filter) write CRLF
+# into the index directly -- which reads as the whole file changed on the
+# next diff. That happened once; this is the structural fix, not attention.
+* text=auto
+
+*.py    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.sql   text eol=lf
+*.css   text eol=lf
+*.toml  text eol=lf
