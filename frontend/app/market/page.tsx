@@ -6,6 +6,7 @@ import { SkillCompare } from "@/components/SkillCompare";
 import { GeographyMoney } from "@/components/sections/GeographyMoney";
 import { ScrollReveal } from "@/components/ScrollReveal";
 import { DataUnavailable } from "@/components/DataUnavailable";
+import { isMarketSkill } from "@/lib/insights";
 import {
   getSkillCompanions,
   getSkillsCompare,
@@ -39,10 +40,14 @@ export default async function MarketPage() {
     );
   }
 
-  const technical = skillsAll.skills.filter((s) => s.category !== "soft");
-  const defaultBundleSkill = technical.find((s) => s.skill === "sql")?.skill ?? technical[0]?.skill ?? "sql";
+  // Same market-skill filter as the homepage's "market leader" stat (see
+  // isMarketSkill) -- without it, a default bundle/compare pairing could
+  // land on a work_arrangement attribute (On-Site) instead of an actual
+  // skill.
+  const marketSkills = skillsAll.skills.filter(isMarketSkill);
+  const defaultBundleSkill = marketSkills.find((s) => s.skill === "sql")?.skill ?? marketSkills[0]?.skill ?? "sql";
   const defaultA = defaultBundleSkill;
-  const defaultB = technical.find((s) => s.skill === "python")?.skill ?? technical[1]?.skill ?? "python";
+  const defaultB = marketSkills.find((s) => s.skill === "python")?.skill ?? marketSkills[1]?.skill ?? "python";
 
   const [companions, compareData] = await Promise.all([
     getSkillCompanions(defaultBundleSkill),
@@ -96,7 +101,7 @@ export default async function MarketPage() {
           </ScrollReveal>
           <div className="mt-10">
             <SkillCompare
-              skills={technical}
+              skills={marketSkills}
               initialData={compareData}
               initialA={defaultA}
               initialB={defaultB}

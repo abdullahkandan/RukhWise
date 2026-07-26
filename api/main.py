@@ -157,6 +157,49 @@ def _skill_postings_map(mentions: list[dict]) -> dict[str, set[str]]:
     return m
 
 
+# --------------------------------------------------------------------------
+# Substantive-skill filter -- the ONE definition of "a skill that belongs
+# in an unscoped, aggregate market ranking" (an insight headline, a "top
+# skill"/"market leader" stat, a curriculum gap). requirement_type=='skill'
+# excludes 'attribute' (work_arrangement entries: on_site, full_time,
+# remote, morning_shift, ...) and 'language'; category not in
+# SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES excludes soft skills (near-
+# universal, low-signal) and office_admin likewise.
+#
+# This exact filter has now leaked three separate times from three
+# independent, incomplete reimplementations that each checked only
+# `category != 'soft'` (missing office_admin, and missing requirement_type
+# entirely -- which is how a work_arrangement ATTRIBUTE like On-Site ends
+# up presented as the market's "top skill"): once in the curriculum gap
+# lists, once in briefing.py/forecast.py's top-skills and forecast-target
+# selection, and now in /insights/live and the homepage's "market leader"
+# stat. _is_substantive_skill is the shared helper every one of those call
+# sites now goes through, so a fourth reimplementation should never happen.
+#
+# NOT applied to /skills/top's own category-scoped or include_soft-toggled
+# output, or to _posting_skills_map/_compute_skill_cooccurrence's default
+# behavior -- those are the user's own explicit choice (picking a category,
+# flipping the soft-skills toggle), not an aggregate claim, and are a
+# deliberately different, legitimate use of the same taxonomy.
+SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES = frozenset({"soft", "office_admin"})
+
+
+def _has_skill_requirement_type(skill_key: str, taxonomy: dict) -> bool:
+    """requirement_type == 'skill' (default when absent) -- the primitive
+    _is_substantive_skill composes from; also used standalone by the
+    curriculum alignment builder, where category exclusion is applied
+    selectively per-list rather than as one combined predicate (see
+    _build_curriculum_alignment's own comment)."""
+    return taxonomy["skills"].get(skill_key, {}).get("requirement_type", "skill") == "skill"
+
+
+def _is_substantive_skill(skill_key: str, taxonomy: dict) -> bool:
+    spec = taxonomy["skills"].get(skill_key)
+    if spec is None or not _has_skill_requirement_type(skill_key, taxonomy):
+        return False
+    return spec.get("category") not in SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES
+
+
 def _require_known_skill(skill: str, taxonomy: dict) -> dict:
     spec = taxonomy["skills"].get(skill)
     if spec is None:
@@ -208,13 +251,29 @@ def _skill_company_map(postings: list[dict], mentions: list[dict]) -> dict[str, 
 
 _BULK_THRESHOLD = 0.25
 
+# forecast.py's BULK_COMPANY_KEY, duplicated here rather than imported --
+# same reasoning as briefing.py's _outcome not importing api/main.py's
+# _forecast_outcome: api/ and the root-level scripts are deliberately
+# independent dependency surfaces. Confirmed bulk by direct investigation
+# (a templated-listing poster), not by crossing _BULK_THRESHOLD or the
+# exact-tagset-duplicate share (see _is_templated_share) -- at current
+# volume this company sits at ~22% of the corpus, under the 25% cutoff,
+# and well under half its own postings are exact tagset duplicates, so
+# neither of this file's own heuristics catches it. A name-based
+# exclusion is needed alongside _bulk_company_keys' threshold, not
+# instead of it -- some future bulk poster may cross the threshold
+# without ever being individually confirmed.
+KNOWN_BULK_COMPANY_KEYS = frozenset({"naseeb enterprise inc"})
+
 
 def _bulk_company_keys(postings: list[dict]) -> set[str]:
-    """Company (normalized) keys holding > 25% of all postings -- "bulk
-    posters" whose volume can single-handedly manufacture skill/pairing
-    signal that has nothing to do with broader market demand. Always
-    computed against the full, unfiltered posting list passed in, so the
-    threshold doesn't drift if called after some other filtering."""
+    """Company (normalized) keys holding > 25% of all postings, UNION
+    KNOWN_BULK_COMPANY_KEYS -- "bulk posters" whose volume (or confirmed
+    templated-listing behavior) can single-handedly manufacture skill/
+    pairing signal that has nothing to do with broader market demand.
+    Threshold share is always computed against the full, unfiltered
+    posting list passed in, so it doesn't drift if called after some
+    other filtering."""
     total = len(postings)
     if total == 0:
         return set()
@@ -222,7 +281,8 @@ def _bulk_company_keys(postings: list[dict]) -> set[str]:
     for p in postings:
         if p.get("company"):
             counts[_normalize_company_key(p["company"])] += 1
-    return {key for key, count in counts.items() if count / total > _BULK_THRESHOLD}
+    threshold_keys = {key for key, count in counts.items() if count / total > _BULK_THRESHOLD}
+    return threshold_keys | (KNOWN_BULK_COMPANY_KEYS & counts.keys())
 
 
 def _apply_bulk_exclusion(
@@ -422,6 +482,13 @@ def skills_top(
             "skill": skill_key,
             "display": spec["display"],
             "category": skill_cat,
+            # Exposed so callers doing their own "top skill" style claim
+            # (e.g. the homepage's market-leader stat) can apply the full
+            # substantive-skill filter client-side -- category alone
+            # (checked above only against the include_soft toggle) isn't
+            # enough to tell a work_arrangement attribute like On-Site
+            # apart from an actual skill; see _is_substantive_skill.
+            "requirement_type": spec.get("requirement_type", "skill"),
             "posting_count": count,
             # Distinct companies demanding this skill -- the bulk-poster-
             # resistant companion to posting_count: a single repeat-poster
@@ -1059,7 +1126,12 @@ def _insight_top_mover(postings: list[dict], mentions: list[dict], taxonomy: dic
         return None  # not enough complete weeks of history to trust a comparison
 
     last_week, prev_week = complete_weeks[-1], complete_weeks[-2]
-    skill_postings = _skill_postings_map(mentions)
+    # Substantive skills only -- see _is_substantive_skill's own comment.
+    # Without this, the biggest "mover" is routinely a work_arrangement
+    # attribute (On-Site, Full-Time) riding ordinary volume noise, not a
+    # market shift in what employers are asking for.
+    substantive_mentions = [m for m in mentions if _is_substantive_skill(m["skill"], taxonomy)]
+    skill_postings = _skill_postings_map(substantive_mentions)
 
     best = None  # (skill_key, delta, cur, prev)
     for skill_key, pids in skill_postings.items():
@@ -1074,12 +1146,12 @@ def _insight_top_mover(postings: list[dict], mentions: list[dict], taxonomy: dic
 
     skill_key, delta, cur, prev = best
     display = taxonomy["skills"][skill_key]["display"]
-    direction = "up" if delta > 0 else "down"
+    direction = "risen" if delta > 0 else "fallen"
     return {
-        "headline": f"{display} postings moved {direction} by {abs(delta)} week-over-week",
+        "headline": f"Demand for {display} has {direction} this week",
         "detail": (
-            f"{display} appeared in {cur} postings first seen the week of {last_week} "
-            f"vs {prev} the week of {prev_week} -- both complete calendar weeks."
+            f"{display} appeared in {cur} postings this week, versus {prev} the week before -- "
+            f"a change of {abs(delta)}."
         ),
         "value": {"skill": skill_key, "current_week": cur, "previous_week": prev, "delta": delta},
         "computed_at": datetime.now(timezone.utc).isoformat(),
@@ -1154,10 +1226,10 @@ def _insight_posting_lifespan(postings: list[dict], mentions: list[dict], taxono
     city_medians = {c: round(statistics.median(v), 2) for c, v in by_city.items() if len(v) >= 3}
 
     return {
-        "headline": f"Postings no longer seen in the latest run stayed live a median of {overall_median:.1f} days",
+        "headline": f"Job postings here typically stay listed for about {overall_median:.0f} days",
         "detail": (
-            f"Based on {len(dropped)} postings present in an earlier run but not the latest one, "
-            f"comparing first_seen_at to last_seen_at."
+            f"Based on {len(dropped)} postings that have since been taken down or replaced, "
+            f"measured from when each one first appeared to when it was last seen."
         ),
         "value": {
             "overall_median_days": round(overall_median, 2),
@@ -1170,13 +1242,17 @@ def _insight_posting_lifespan(postings: list[dict], mentions: list[dict], taxono
 
 
 def _insight_dominance_ratio(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
-    """(d) Largest posting-count ratio between two skills in the same
-    (non-soft) category, e.g. SQL vs Tableau."""
+    """(d) Largest posting-count ratio between two substantive skills in
+    the same category, e.g. SQL vs Tableau. Substantive-skill filter (see
+    _is_substantive_skill) applies here for the same reason it applies
+    everywhere else in this file: without it, the biggest "dominance" is
+    routinely a work_arrangement attribute (On-Site over Contract) or an
+    office_admin skill, not a finding about the technical market."""
     skill_postings = _skill_postings_map(mentions)
 
     by_category = defaultdict(list)
     for skill_key, spec in taxonomy["skills"].items():
-        if spec["category"] == "soft":
+        if not _is_substantive_skill(skill_key, taxonomy):
             continue
         count = len(skill_postings.get(skill_key, ()))
         if count >= 5:  # minimum sample for the ratio to mean anything
@@ -1203,8 +1279,13 @@ def _insight_dominance_ratio(postings: list[dict], mentions: list[dict], taxonom
     other_display = taxonomy["skills"][other_key]["display"]
 
     return {
-        "headline": f"{leader_display} outmentions {other_display} {ratio:.1f}x within {cat}",
-        "detail": f"{leader_display} appears in {leader_count} postings vs {other_count} for {other_display}.",
+        # No raw category key in user-facing text (e.g. "data_ml") -- the
+        # comparison stands on its own without naming the grouping.
+        "headline": f"{leader_display} is asked for far more often than {other_display}",
+        "detail": (
+            f"{leader_display} appears in {leader_count} postings, versus {other_count} for "
+            f"{other_display} -- roughly {ratio:.0f} times as many."
+        ),
         "value": {
             "category": cat,
             "leader": leader_key,
@@ -1243,21 +1324,27 @@ def _insight_foreign_currency(postings: list[dict], mentions: list[dict], taxono
 
 
 def _insight_zero_technical(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
-    """(f) Share of postings mentioning zero technical (non-soft) skills."""
+    """(f) Share of postings mentioning zero substantive skills -- see
+    _is_substantive_skill. Was previously "category != soft", which
+    counted a posting as having a "technical skill" for mentioning nothing
+    but On-Site and Full-Time -- exactly the leak this file's other
+    generators had too."""
     if not postings:
         return None
 
-    technical_posting_ids = {m["posting_id"] for m in mentions if m["category"] != "soft"}
-    zero_technical = sum(1 for p in postings if p["id"] not in technical_posting_ids)
+    substantive_posting_ids = {
+        m["posting_id"] for m in mentions if _is_substantive_skill(m["skill"], taxonomy)
+    }
+    zero_technical = sum(1 for p in postings if p["id"] not in substantive_posting_ids)
     share = zero_technical / len(postings)
     if share == 0:
         return None
 
     return {
-        "headline": f"{share * 100:.0f}% of postings mention zero technical skills from the taxonomy",
+        "headline": f"{share * 100:.0f}% of postings don't list a specific skill requirement",
         "detail": (
-            f"{zero_technical} of {len(postings)} postings have no taxonomy-recognized technical "
-            f"(non-soft) skill mention at all."
+            f"{zero_technical} of {len(postings)} postings mention no particular skill at all -- "
+            f"just a job title and, often, general requirements like experience or education."
         ),
         "value": {"zero_technical_count": zero_technical, "total_postings": len(postings), "share": round(share, 4)},
         "computed_at": datetime.now(timezone.utc).isoformat(),
@@ -1265,39 +1352,30 @@ def _insight_zero_technical(postings: list[dict], mentions: list[dict], taxonomy
     }
 
 
-def _insight_strongest_pairing(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
-    """(g) Highest-lift skill pair this period -- the two skills demanded
-    together far more than their individual base rates would predict.
+_PAIRING_MIN_JOINT_COUNT = 15  # below this, the pairing is noise, not a finding -- suppressed, not hedged
 
-    Phrasing guard: lift explodes for rare skills (two skills each mentioned
-    a handful of times can produce a 50x+ lift from pure small-sample noise),
-    so below a joint_count of 15 the headline leads with the plain count,
-    never the multiplier -- the multiplier is still reported in `value` for
-    anyone who wants it, just not foregrounded in prose."""
-    pairs = _compute_skill_cooccurrence(mentions, taxonomy, len(postings), include_soft=False)
+
+def _insight_strongest_pairing(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
+    """(g) The skill pair demanded together far more than chance would
+    predict, restricted to substantive skills (see _is_substantive_skill).
+
+    Below _PAIRING_MIN_JOINT_COUNT joint postings, the pairing is
+    genuinely too thin a sample to present as a finding (the underlying
+    ratio can swing wildly from a couple of postings) -- suppressed
+    entirely (returns None) rather than shown with a caveat, per the same
+    reasoning _insight_top_mover applies to incomplete weeks."""
+    substantive_mentions = [m for m in mentions if _is_substantive_skill(m["skill"], taxonomy)]
+    pairs = _compute_skill_cooccurrence(substantive_mentions, taxonomy, len(postings), include_soft=False)
     if not pairs:
         return None
 
     best = max(pairs, key=lambda p: p["lift"])
-    if best["joint_count"] < 15:
-        headline = (
-            f"{best['display_a']} and {best['display_b']} appear together in "
-            f"{best['joint_count']} postings so far"
-        )
-        detail = (
-            f"A small but consistent pairing -- {best['lift']:.1f}x above chance -- though the "
-            f"sample ({best['joint_count']} postings) is still thin enough to watch, not trust yet."
-        )
-    else:
-        headline = f"{best['display_a']} and {best['display_b']} are the strongest skill pairing right now"
-        detail = (
-            f"{best['joint_count']} postings mention both -- {best['lift']:.1f}x more often than "
-            f"chance alone would predict if the two skills were demanded independently."
-        )
+    if best["joint_count"] < _PAIRING_MIN_JOINT_COUNT:
+        return None
 
     return {
-        "headline": headline,
-        "detail": detail,
+        "headline": f"{best['display_a']} and {best['display_b']} are commonly asked for together",
+        "detail": f"{best['joint_count']} postings mention both {best['display_a']} and {best['display_b']}.",
         "value": {
             "skill_a": best["skill_a"],
             "skill_b": best["skill_b"],
@@ -1310,19 +1388,16 @@ def _insight_strongest_pairing(postings: list[dict], mentions: list[dict], taxon
 
 
 def _insight_top_skill_companion(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
-    """(h) Most demanded companion of the single most-mentioned technical
-    skill -- "employers asking for X also ask for Y", applied to whichever
-    X currently leads the market."""
-    technical_mentions = [
-        m for m in mentions
-        if (spec := taxonomy["skills"].get(m["skill"])) is not None and spec["category"] != "soft"
-    ]
-    skill_postings = _skill_postings_map(technical_mentions)
+    """(h) Most demanded companion of the single most-mentioned substantive
+    skill (see _is_substantive_skill) -- "employers asking for X also ask
+    for Y", applied to whichever X currently leads the market."""
+    substantive_mentions = [m for m in mentions if _is_substantive_skill(m["skill"], taxonomy)]
+    skill_postings = _skill_postings_map(substantive_mentions)
     if not skill_postings:
         return None
 
     top_skill = max(skill_postings, key=lambda s: len(skill_postings[s]))
-    pairs = _compute_skill_cooccurrence(mentions, taxonomy, len(postings), include_soft=False)
+    pairs = _compute_skill_cooccurrence(substantive_mentions, taxonomy, len(postings), include_soft=False)
 
     companions = []
     for p in pairs:
@@ -1354,10 +1429,17 @@ def _insight_top_skill_companion(postings: list[dict], mentions: list[dict], tax
 
 
 def _insight_top_company(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
-    """(i) Top hiring company by distinct posting count."""
+    """(i) Top hiring company by distinct posting count -- bulk posters
+    excluded entirely (see _bulk_company_keys), not just caveated. A
+    company holding >25% of all postings names a templated-listing
+    pattern (see the "templated share" finding on /engine), not a company
+    actually hiring at that scale; excluding is the honest answer for a
+    homepage claim, where there's no room for the concentration caveat
+    /methodology already carries."""
+    bulk_keys = _bulk_company_keys(postings)
     grouped: dict[str, list[dict]] = defaultdict(list)
     for p in postings:
-        if p.get("company"):
+        if p.get("company") and _normalize_company_key(p["company"]) not in bulk_keys:
             grouped[_normalize_company_key(p["company"])].append(p)
     if not grouped:
         return None
@@ -1773,10 +1855,12 @@ CURRICULUM_NEAR_ZERO_POSTINGS = 2
 # are near-universal in postings AND get picked up on the curriculum side via
 # general-education requirements the course parser can't itemize, so their
 # presence in "demanded, not taught" is a matching artifact of that GenEd gap,
-# not a real substantive-curriculum finding. Excluded from the list entirely.
-# (Separately, non-skill requirement_types -- attribute, language -- are
-# excluded from ALL THREE lists upstream, in _is_teachable_skill below.)
-CURRICULUM_GAP_EXCLUDED_CATEGORIES = frozenset({"soft", "office_admin"})
+# not a real substantive-curriculum finding. Excluded from the list entirely,
+# via the shared SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES (see that constant's
+# own comment, near _skill_postings_map, for why this is the one place that
+# set is defined). (Separately, non-skill requirement_types -- attribute,
+# language -- are excluded from ALL THREE lists upstream, via the shared
+# _has_skill_requirement_type.)
 
 
 def _curriculum_market_stats() -> tuple[dict[str, set[str]], dict[str, set[str]], int]:
@@ -1819,19 +1903,15 @@ def _build_curriculum_alignment() -> dict:
             "category": spec.get("category", "unknown"),
         }
 
-    def _is_teachable_skill(skill_key: str) -> bool:
-        """requirement_type == 'skill' only (excludes 'attribute' --
-        work_arrangement entries like On-Site/Hybrid/shift -- and
-        'language'; credential/experience aren't taxonomy entries at all,
-        see structured_extraction.py). A curriculum can't teach, or fail
-        to teach, a workplace attribute or a language requirement -- their
-        presence in any of the three lists below is a matching artifact,
-        not a finding. Filtered once, on both input sets, so it can't leak
-        into just one of the three derived lists."""
-        return taxonomy["skills"].get(skill_key, {}).get("requirement_type", "skill") == "skill"
-
-    all_market_skills = {s for s in skill_postings.keys() if _is_teachable_skill(s)}
-    all_curriculum_skills = {s for s in skill_courses.keys() if _is_teachable_skill(s)}
+    # Credential/experience aren't taxonomy entries at all (see
+    # structured_extraction.py). A curriculum can't teach, or fail to
+    # teach, a workplace attribute or a language requirement -- their
+    # presence in any of the three lists below is a matching artifact, not
+    # a finding. Filtered once, via the shared _has_skill_requirement_type,
+    # on both input sets, so it can't leak into just one of the three
+    # derived lists.
+    all_market_skills = {s for s in skill_postings.keys() if _has_skill_requirement_type(s, taxonomy)}
+    all_curriculum_skills = {s for s in skill_courses.keys() if _has_skill_requirement_type(s, taxonomy)}
 
     # a) TAUGHT AND DEMANDED -- ranked by market posting count.
     taught_and_demanded = [
@@ -1847,12 +1927,12 @@ def _build_curriculum_alignment() -> dict:
 
     # b) DEMANDED NOT TAUGHT -- the headline list. >=5 distinct companies,
     # zero curriculum matches, and a SUBSTANTIVE skill (soft/office_admin
-    # excluded -- see CURRICULUM_GAP_EXCLUDED_CATEGORIES). Ranked by company
-    # count (the qualifying metric), posting count as tiebreak.
+    # excluded -- see SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES). Ranked by
+    # company count (the qualifying metric), posting count as tiebreak.
     demanded_not_taught = []
     for skill in (all_market_skills - all_curriculum_skills):
         entry = _display(skill)
-        if entry["category"] in CURRICULUM_GAP_EXCLUDED_CATEGORIES:
+        if entry["category"] in SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES:
             continue
         company_count = len(skill_companies.get(skill, ()))
         if company_count >= CURRICULUM_GAP_MIN_COMPANIES:

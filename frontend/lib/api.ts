@@ -65,6 +65,12 @@ export interface SkillTopEntry {
   skill: string;
   display: string;
   category: string;
+  /** 'skill' | 'attribute' | 'language' -- 'attribute' covers
+   * work_arrangement entries (On-Site, Full-Time, Morning Shift, ...),
+   * which are not skills. A "top skill" claim must filter to
+   * requirement_type === 'skill' in addition to excluding soft/
+   * office_admin categories -- see isMarketSkill in lib/insights.ts. */
+  requirement_type: string;
   posting_count: number;
   /** Distinct companies demanding this skill -- the bulk-poster-resistant
    * companion to posting_count: a single repeat-poster inflates the latter

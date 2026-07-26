@@ -5,7 +5,7 @@ import { FlowField } from "@/components/FlowField";
 import { InsightStrip } from "@/components/sections/InsightStrip";
 import { DoorwayPanel } from "@/components/DoorwayPanel";
 import { DataUnavailable } from "@/components/DataUnavailable";
-import { isResearcherInsight } from "@/lib/insights";
+import { isResearcherInsight, isMarketSkill } from "@/lib/insights";
 import { getInsightsLive, getSkillsTop, getStatsOverview, getSystemHealth } from "@/lib/api";
 
 export default async function HomePage() {
@@ -33,11 +33,17 @@ export default async function HomePage() {
   // foreign-currency) live on /engine's "Findings for the curious" instead.
   // insights degrades gracefully (empty strip) rather than failing the
   // whole page -- it's a nice-to-have here, not load-bearing like Hero's
-  // numbers above.
-  const generalInsights = insights ? insights.insights.filter((i) => !isResearcherInsight(i)).slice(0, 4) : [];
+  // numbers above. Capped at 3, not a fixed count: fewer genuinely
+  // noteworthy findings is better than padding out to a target number
+  // with a weak one.
+  const generalInsights = insights ? insights.insights.filter((i) => !isResearcherInsight(i)).slice(0, 3) : [];
 
-  const technical = skillsAll.skills.filter((s) => s.category !== "soft");
-  const topSkill = technical[0];
+  // Market-skill filter (requirement_type === 'skill', category not soft/
+  // office_admin) -- see isMarketSkill's own comment. Without the
+  // requirement_type half of this, the "market leader" teaser below
+  // surfaces a work_arrangement attribute (On-Site) as if it were a skill.
+  const marketSkills = skillsAll.skills.filter(isMarketSkill);
+  const topSkill = marketSkills[0];
 
   return (
     <main>

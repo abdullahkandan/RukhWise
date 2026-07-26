@@ -1,4 +1,17 @@
-import type { Insight } from "./api";
+import type { Insight, SkillTopEntry } from "./api";
+
+// Mirrors api/main.py's SUBSTANTIVE_SKILL_EXCLUDED_CATEGORIES exactly --
+// see that constant's comment for why this filter has to live in exactly
+// one place per surface (backend already has its own copy; this is the
+// frontend's, since a "top skill"/"market leader" stat computed client-
+// side from /skills/top's raw, unfiltered rows needs the same definition
+// of "a skill that belongs in an aggregate ranking" the backend insight
+// generators use).
+const MARKET_SKILL_EXCLUDED_CATEGORIES = new Set(["soft", "office_admin"]);
+
+export function isMarketSkill(entry: Pick<SkillTopEntry, "category" | "requirement_type">): boolean {
+  return entry.requirement_type === "skill" && !MARKET_SKILL_EXCLUDED_CATEGORIES.has(entry.category);
+}
 
 export type InsightTone = "alert" | "neutral";
 
