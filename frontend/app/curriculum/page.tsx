@@ -14,7 +14,6 @@ export const metadata: Metadata = {
 // The page is a summary, not a database dump. Full lists stay available on
 // /curriculum/alignment; a visitor gets the head of each and a count.
 const TOP_N = 10;
-const TAIL_N = 5;
 
 function Prose({ children }: { children: React.ReactNode }) {
   return <div className="mt-4 max-w-2xl font-sans text-[15px] leading-relaxed text-java/75">{children}</div>;
@@ -186,36 +185,6 @@ export default async function CurriculumPage() {
         )}
       </Section>
 
-      {/* Taught, not demanded. The API drops this list entirely rather than
-          publish a couple of stragglers, so an empty array means "nothing
-          cleared the bar" -- render nothing at all, not an empty state. */}
-      {data.taught_not_demanded.length > 0 && (
-        <Section register="cream" className="py-20 md:py-28 border-t border-java/10">
-          <p className="font-mono text-xs uppercase tracking-[0.2em] text-java/50">The other direction</p>
-          <h2 className="mt-3 max-w-2xl font-display text-3xl font-medium leading-tight md:text-4xl">
-            Taught, barely visible in postings
-          </h2>
-          <p className="mt-4 max-w-2xl font-sans text-[15px] leading-relaxed text-java/70">
-            Taught, but named in almost no postings. Low demand is not low value.
-          </p>
-
-          <ol className="mt-10 flex flex-col gap-1">
-            {data.taught_not_demanded.slice(0, TAIL_N).map((row, i) => (
-              <SkillRow
-                key={row.skill}
-                rank={i + 1}
-                display={row.display}
-                category={row.category}
-                primaryLabel={`course${row.course_count === 1 ? "" : "s"}`}
-                primaryValue={row.course_count ?? 0}
-                secondaryLabel={`posting${row.posting_count === 1 ? "" : "s"}`}
-                secondaryValue={row.posting_count}
-              />
-            ))}
-          </ol>
-        </Section>
-      )}
-
       {/* Methodology */}
       <Section register="cream" className="pb-24 pt-4 md:pb-32">
         <h2 className="font-display text-2xl font-medium">Methodology</h2>
@@ -237,10 +206,6 @@ export default async function CurriculumPage() {
               ceiling — universities routinely exceed them with electives and specializations neither
               document lists. &ldquo;Not taught&rdquo; means not in the national minimum curriculum, not
               that no graduate has encountered it.
-            </li>
-            <li>
-              <strong className="text-java">Thin demand, and zero rows.</strong>{" "}
-              {data.taught_not_demanded_note}
             </li>
             <li>
               <strong className="text-java">Course parsing is imperfect.</strong> Both PDFs mix table

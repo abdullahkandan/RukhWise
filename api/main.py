@@ -2036,15 +2036,8 @@ CURRICULUM_SCOPE_NOTE = (
     "Compared against HEC's and NCEAC's official computing curricula. Computing "
     "disciplines only, so it says nothing about the other fields this site tracks."
 )
-CURRICULUM_TAUGHT_NOT_DEMANDED_NOTE = (
-    "Foundational computing subjects (data structures, algorithms, operating systems) "
-    "may never appear as a NAMED requirement in a posting even though the role depends "
-    "on them, so a thin posting count here is not evidence a subject is unwanted. Rows "
-    "reading zero are never published -- an absence this data can't distinguish from "
-    "'the taxonomy never named it here' isn't a finding."
-)
 CURRICULUM_DEMANDED_NOT_TAUGHT_NOTE = (
-    "All three lists count teachable technical and professional skills only. "
+    "Both lists count teachable technical and professional skills only. "
     "Workplace attributes (on-site, shift, full-time), credentials and languages are "
     "excluded because a curriculum can't teach them; soft and office/admin skills are "
     "excluded because curricula do cover them, through general-education requirements "
@@ -2058,19 +2051,23 @@ CURRICULUM_MATCHING_NOTE = (
 )
 CURRICULUM_MARKET_DOMAINS = ("technology_it", "engineering")
 CURRICULUM_GAP_MIN_COMPANIES = 5
-CURRICULUM_NEAR_ZERO_POSTINGS = 2
-# Floor for the "taught, barely visible" list: 1, not 0. A row asserting
-# zero postings is never a useful published claim -- see the list's own
-# comment in _build_curriculum_alignment.
-CURRICULUM_NEAR_ZERO_MIN_POSTINGS = 1
-# Below this many surviving rows the list is dropped entirely rather than
-# published as a couple of stragglers.
-CURRICULUM_NEAR_ZERO_MIN_ROWS = 3
-# All three lists are restricted to SUBSTANTIVE skills by one input-level
-# filter (_is_substantive_skill) inside _build_curriculum_alignment -- both
-# the requirement_type == "skill" half and the soft/office_admin category
-# half. See that call site's comment; there is deliberately no second,
-# per-list copy of either check.
+# Both lists are restricted to SUBSTANTIVE skills by one input-level filter
+# (_is_substantive_skill) inside _build_curriculum_alignment -- both the
+# requirement_type == "skill" half and the soft/office_admin category half.
+# See that call site's comment; there is deliberately no second, per-list
+# copy of either check.
+#
+# A third list -- curriculum skills with low/near-zero market presence --
+# was tried and removed. It sat right at its own row-count floor (4 rows
+# against a minimum of 3), so it would appear and disappear as the data
+# shifted week to week, which reads as a bug to a returning visitor. It was
+# also the weakest of the three conceptually: this page's subject is what
+# the market asks for that curricula don't teach, not the reverse, and low
+# market presence genuinely isn't evidence of low value for a foundational
+# subject -- a claim that can't cleanly resolve to either "gap" or "not a
+# gap" doesn't belong on a page whose whole premise is resolving that
+# question. See git history for the removed computation if it's ever worth
+# revisiting with a sturdier threshold.
 
 
 def _curriculum_market_stats() -> tuple[dict[str, set[str]], dict[str, set[str]], int]:
@@ -2156,31 +2153,6 @@ def _build_curriculum_alignment() -> dict:
             })
     demanded_not_taught.sort(key=lambda r: (-r["company_count"], -r["posting_count"]))
 
-    # c) TAUGHT NOT DEMANDED -- curriculum skills with low (not absent)
-    # market presence, ranked by course_count so the most heavily taught
-    # comes first.
-    #
-    # The floor is deliberate: a published row reading "0 postings" asserts
-    # an absence this data can't support -- it means "no posting named this
-    # skill", which is indistinguishable from "the taxonomy never had a
-    # chance to name it here". Same principle as the insight sanity gate:
-    # a claim that rounds to zero doesn't get published. And a list this
-    # short stops being a pattern, so below _MIN_ROWS it is dropped whole
-    # rather than shown as one or two lonely rows.
-    taught_not_demanded = []
-    for skill in all_curriculum_skills:
-        posting_count = len(skill_postings.get(skill, ()))
-        if CURRICULUM_NEAR_ZERO_MIN_POSTINGS <= posting_count <= CURRICULUM_NEAR_ZERO_POSTINGS:
-            taught_not_demanded.append({
-                **_display(skill),
-                "posting_count": posting_count,
-                "company_count": len(skill_companies.get(skill, ())),
-                "course_count": len(skill_courses[skill]),
-            })
-    taught_not_demanded.sort(key=lambda r: -r["course_count"])
-    if len(taught_not_demanded) < CURRICULUM_NEAR_ZERO_MIN_ROWS:
-        taught_not_demanded = []
-
     matched_course_ids = {cid for ids in skill_courses.values() for cid in ids}
 
     return {
@@ -2194,16 +2166,14 @@ def _build_curriculum_alignment() -> dict:
         "taught_and_demanded": taught_and_demanded,
         "demanded_not_taught": demanded_not_taught,
         "demanded_not_taught_note": CURRICULUM_DEMANDED_NOT_TAUGHT_NOTE,
-        "taught_not_demanded": taught_not_demanded,
-        "taught_not_demanded_note": CURRICULUM_TAUGHT_NOT_DEMANDED_NOTE,
     }
 
 
 @app.get("/curriculum/alignment")
 @cached()
 def curriculum_alignment():
-    """The full index: taught+demanded, demanded-not-taught, and
-    taught-not-demanded, plus course parse/match summary stats."""
+    """The full index: taught+demanded and demanded-not-taught, plus course
+    parse/match summary stats."""
     return _build_curriculum_alignment()
 
 

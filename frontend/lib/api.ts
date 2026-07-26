@@ -652,8 +652,6 @@ export interface CurriculumAlignmentResponse {
   taught_and_demanded: CurriculumSkillEntry[];
   demanded_not_taught: CurriculumSkillEntry[];
   demanded_not_taught_note: string;
-  taught_not_demanded: CurriculumSkillEntry[];
-  taught_not_demanded_note: string;
 }
 
 export function getCurriculumAlignment() {
