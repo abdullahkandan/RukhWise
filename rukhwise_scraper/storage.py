@@ -1390,13 +1390,15 @@ def get_curriculum_skill_map() -> list[dict]:
 
 # --------------------------------------------------------------------------
 # Weekly briefing (briefing.py) -- a fully-automated, fact-gated narrative
-# published once per graded week. Same append-only, immutable-once-written
-# pattern as forecasts (see BRIEFINGS_TABLE_SQL's trigger): a briefing row
-# is never edited or deleted after insert, only ever added to. Unlike
-# forecasts, there's no follow-up write at all (no grading step), so the
-# trigger here rejects every update/delete unconditionally -- simpler than
-# forecasts' trigger, which had to carve out exactly one allowed grading
-# update.
+# published once per graded week. Append-only, immutable-once-written (see
+# BRIEFINGS_TABLE_SQL's trigger): a briefing row's own columns are never
+# edited or deleted after insert. A correction to an already-published
+# week is a NEW row, never an edit of the original -- the original stays
+# the untouched audit record. superseded_by (set on the OLD row, pointing
+# at the NEW row) is the one exception the trigger allows: a single,
+# one-directional NULL -> id transition, with every other column required
+# to stay byte-identical, same "exactly one narrow follow-up write" shape
+# as forecasts' grading-update trigger.
 # --------------------------------------------------------------------------
 
 BRIEFINGS_TABLE_SQL = """\
@@ -1408,15 +1410,35 @@ create table if not exists briefings (
     source text not null check (source in ('llm', 'template')),
     facts_json jsonb not null,
     model_version text,
-    blocked_reason text,
-    unique (week_start)
+    blocked_reason text
 );
+
+-- Superseded-in-place support (idempotent against the original migration,
+-- which had a table-wide unique(week_start) -- dropped below, since a
+-- corrected briefing now legitimately shares week_start with the
+-- original it corrects).
+alter table briefings add column if not exists superseded_by uuid references briefings(id);
+alter table briefings drop constraint if exists briefings_week_start_key;
 
 create or replace function reject_briefings_mutation()
 returns trigger
 language plpgsql
 as $$
 begin
+    if TG_OP = 'UPDATE'
+        and old.superseded_by is null
+        and new.superseded_by is not null
+        and new.id = old.id
+        and new.week_start = old.week_start
+        and new.created_at = old.created_at
+        and new.body = old.body
+        and new.source = old.source
+        and new.facts_json = old.facts_json
+        and coalesce(new.model_version, '') = coalesce(old.model_version, '')
+        and coalesce(new.blocked_reason, '') = coalesce(old.blocked_reason, '')
+    then
+        return new;  -- the one allowed write: marking this row superseded
+    end if;
     raise exception 'briefings rows are immutable -- % is not allowed (id=%)',
         TG_OP, coalesce(old.id, new.id);
 end;
@@ -1454,41 +1476,67 @@ def get_skill_mentions_for_briefing() -> list[dict]:
 
 
 def get_briefing_for_week(week_start: str) -> dict | None:
-    """The briefings row for one week (ISO date string), if one has
-    already been published -- briefing.py's idempotency check, so a
-    workflow retry never attempts a second LLM call or insert for a week
-    already done."""
+    """The CURRENT (non-superseded) briefings row for one week (ISO date
+    string), if any -- briefing.py's idempotency check, so an ordinary
+    (non --regenerate) run never attempts a second LLM call or insert for
+    a week that already has an active published briefing. A superseded
+    row is never returned here -- only the version currently presented as
+    "the" briefing for that week counts as already-done."""
     client = _get_client()
-    res = client.table("briefings").select("id,week_start,source").eq("week_start", week_start).execute()
+    res = (
+        client.table("briefings")
+        .select("id,week_start,source")
+        .eq("week_start", week_start)
+        .is_("superseded_by", "null")
+        .execute()
+    )
     rows = res.data or []
     return rows[0] if rows else None
 
 
 def insert_briefing(row: dict) -> dict:
     """Insert exactly one briefings row -- briefing.py always writes at
-    most one per run. Upsert-safe via the table's unique(week_start), same
-    ignore_duplicates convention as insert_forecasts: a second same-week
-    attempt (workflow retry) is silently skipped rather than erroring,
-    since the immutability trigger would reject an overwrite anyway.
+    most one per run. A plain insert, not an upsert: week_start is no
+    longer unique at the DB level (a correction for an already-published
+    week is a second, later row sharing that week_start on purpose, not a
+    conflict) -- see BRIEFINGS_TABLE_SQL's superseded_by migration. The
+    caller (briefing.py's run()) is what decides whether a given call is
+    a fresh publish or an intentional --regenerate/supersede; this
+    function just writes what it's given.
     row needs: week_start, body, source, facts_json, model_version
     (nullable), blocked_reason (nullable). Returns
     {"inserted": bool, "row": dict | None}."""
     client = _get_client()
     try:
-        result = (
-            client.table("briefings")
-            .upsert([row], on_conflict="week_start", ignore_duplicates=True)
-            .execute()
-        )
+        result = client.table("briefings").insert([row]).execute()
         returned = result.data or []
         if returned:
-            logger.info(f"insert_briefing: published week_start={row['week_start']} source={row['source']}")
+            logger.info(
+                f"insert_briefing: published week_start={row['week_start']} "
+                f"source={row['source']} id={returned[0]['id']}"
+            )
             return {"inserted": True, "row": returned[0]}
-        logger.info(f"insert_briefing: week_start={row['week_start']} already published, skipped")
         return {"inserted": False, "row": None}
     except Exception as exc:
         logger.error(f"Failed to insert briefing for week_start={row.get('week_start')}: {exc}")
         return {"inserted": False, "row": None}
+
+
+def supersede_briefing(old_id: str, new_id: str) -> bool:
+    """The one allowed update on an existing briefings row: sets
+    superseded_by (null -> new_id) on the OLD row once its correction
+    (new_id) has been successfully inserted. The immutability trigger is
+    the real guarantee here (every other column must stay byte-identical,
+    and this can only ever fire once per row since old.superseded_by must
+    already be null) -- this function is just the plain call."""
+    client = _get_client()
+    try:
+        client.table("briefings").update({"superseded_by": new_id}).eq("id", old_id).execute()
+        logger.info(f"supersede_briefing: {old_id} superseded by {new_id}")
+        return True
+    except Exception as exc:
+        logger.error(f"Failed to mark briefing id={old_id} superseded by id={new_id}: {exc}")
+        return False
 
 
 if __name__ == "__main__":

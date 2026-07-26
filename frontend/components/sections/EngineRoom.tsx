@@ -18,6 +18,7 @@ import { ScrollReveal } from "../ScrollReveal";
 import { SectionDivider } from "../SectionDivider";
 
 const FORECASTS_EMPTY_COPY = "First forecasts logged July 18, 2026. First grades arrive July 27.";
+const BRIEFING_EMPTY_COPY = "The first weekly briefing publishes after the first grading run, July 27, 2026.";
 
 // The rest of the engine room (system health, curious findings elsewhere on
 // the page) shouldn't go dark just because forecasting data isn't ready --
@@ -174,6 +175,15 @@ function BriefingPanel({ briefing, index }: { briefing: BriefingsLatestResponse;
 
       {briefing.has_briefing ? (
         <>
+          {briefing.supersedes && (
+            <p className="mt-5 max-w-2xl font-mono text-xs uppercase tracking-[0.12em] text-sceptre-bright">
+              Corrected version -- see{" "}
+              <a href="#superseded-original" className="underline underline-offset-2">
+                the original
+              </a>{" "}
+              below
+            </p>
+          )}
           <p className="mt-5 max-w-2xl font-sans text-[15px] leading-relaxed text-java/85">
             {briefing.body}
           </p>
@@ -182,9 +192,21 @@ function BriefingPanel({ briefing, index }: { briefing: BriefingsLatestResponse;
             never computes or predicts, and every number and name above traces back to the
             underlying data.
           </p>
+          {briefing.supersedes && (
+            <div id="superseded-original" className="mt-8 border-t border-dashed border-java/20 pt-6">
+              <p className="font-mono text-xs uppercase tracking-widest text-java/40">
+                Original, published {new Date(briefing.supersedes.created_at).toLocaleDateString("en-US", {
+                  year: "numeric", month: "short", day: "numeric",
+                })} -- superseded due to a fact-computation error, kept unmodified as the audit record
+              </p>
+              <p className="mt-3 max-w-2xl font-sans text-sm leading-relaxed text-java/50">
+                {briefing.supersedes.body}
+              </p>
+            </div>
+          )}
         </>
       ) : (
-        <p className="mt-4 font-sans text-sm text-java/60">{FORECASTS_EMPTY_COPY}</p>
+        <p className="mt-4 font-sans text-sm text-java/60">{BRIEFING_EMPTY_COPY}</p>
       )}
     </ScrollReveal>
   );

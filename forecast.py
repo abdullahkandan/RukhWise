@@ -80,6 +80,15 @@ BULK_COMPANY_KEY = "naseeb enterprise inc"  # normalized: whitespace-collapsed, 
 # into the source_scope string stored on every row), which a set does not
 # guarantee.
 AUTOMATED_SOURCES = ("mustakbil", "indeed")
+# Volume actual/prediction is narrower still than AUTOMATED_SOURCES --
+# Mustakbil only, permanently (see run_grade()'s own comment on this).
+# Named here, not just inlined as a string literal at each of this
+# module's two call sites, so anything ELSE that needs "what counts as a
+# week's volume" (briefing.py) imports this exact constant instead of
+# re-deriving its own answer -- the two can then never structurally
+# disagree about what a week's volume means, even if AUTOMATED_SOURCES
+# itself changes later.
+VOLUME_SOURCE = "mustakbil"
 TOP_SKILLS_COUNT = 12
 MEAN_WINDOW_WEEKS = 3
 INTERVAL_WINDOW_WEEKS = 4
@@ -285,7 +294,7 @@ def run_predict() -> list[dict]:
         pid: p for pid, p in postings_index.items() if p.get("source") in AUTOMATED_SOURCES
     }
 
-    mustakbil_postings = [p for p in postings if p.get("source") == "mustakbil"]
+    mustakbil_postings = [p for p in postings if p.get("source") == VOLUME_SOURCE]
     if not mustakbil_postings:
         logger.error("No Mustakbil postings found -- cannot build the volume/all target")
         volume_mean_weeks: list[datetime] = []
@@ -412,7 +421,7 @@ def run_grade() -> list[dict]:
     mentions = get_skill_mentions_for_forecast()
     postings_index = {p["id"]: p for p in postings}
 
-    mustakbil_postings = [p for p in postings if p.get("source") == "mustakbil"]
+    mustakbil_postings = [p for p in postings if p.get("source") == VOLUME_SOURCE]
     volume_actual = _count_in_week(mustakbil_postings, complete_week_start)
 
     # Skill actuals are computed per-row against THAT row's own recorded

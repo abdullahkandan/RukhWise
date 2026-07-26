@@ -189,16 +189,17 @@ def get_curriculum_skill_map() -> list[dict]:
     return _fetch_all("curriculum_skill_map", "course_id,skill,match_source")
 
 
-BRIEFING_COLUMNS = "id,week_start,created_at,body,source,facts_json,model_version,blocked_reason"
+BRIEFING_COLUMNS = "id,week_start,created_at,body,source,facts_json,model_version,blocked_reason,superseded_by"
 
 
 @cached()
 def get_briefings() -> list[dict]:
-    """Every briefings row -- written only by briefing.py (service-role
-    key), immutable once inserted (see that table's trigger). Small,
-    append-only, one row per week -- no pagination concerns in practice,
-    but _fetch_all is used anyway for consistency with every other
-    fetcher here."""
+    """Every briefings row, superseded ones included -- written only by
+    briefing.py (service-role key), immutable once inserted (see that
+    table's trigger; superseded_by is the one exception, and even that
+    only ever moves null -> a real id once). Small, append-only -- no
+    pagination concerns in practice, but _fetch_all is used anyway for
+    consistency with every other fetcher here."""
     return _fetch_all("briefings", BRIEFING_COLUMNS)
 
 

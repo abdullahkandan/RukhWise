@@ -754,6 +754,10 @@ export interface BriefingSummary {
   source: "llm" | "template";
   model_version: string | null;
   blocked_reason: string | null;
+  /** Set once this row has been corrected by a later briefing for the
+   * same week -- points at the replacement's id. The row itself is never
+   * edited; this is the only field that ever changes after publish. */
+  superseded_by: string | null;
 }
 
 export interface BriefingsLatestResponse {
@@ -765,6 +769,10 @@ export interface BriefingsLatestResponse {
   source?: "llm" | "template";
   model_version?: string | null;
   blocked_reason?: string | null;
+  superseded_by?: string | null;
+  /** Present only when the current briefing is itself a correction --
+   * the full original it replaced, for plain on-page disclosure. */
+  supersedes?: BriefingSummary | null;
 }
 
 export async function getBriefingsLatest(): Promise<BriefingsLatestResponse | null> {

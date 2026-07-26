@@ -53,6 +53,7 @@ logger = setup_logging()
 from forecast import (  # noqa: E402
     AUTOMATED_SOURCES,
     BULK_COMPANY_KEY,
+    VOLUME_SOURCE,
     _complete_week_start,
     _count_in_week,
     _next_week_start,
@@ -73,6 +74,13 @@ TAXONOMY_VERSION = "taxonomy_v3"
 
 TOP_SKILLS_LIMIT = 5
 TOP_SKILLS_COMPARISON_LIMIT = 10
+# Same exclusion this project applies everywhere a skill ranking is meant
+# to be substantive (see api/main.py's CURRICULUM_GAP_EXCLUDED_CATEGORIES):
+# soft skills are near-universal and low-signal; office_admin likewise.
+# Combined with requirement_type == 'skill' (see _is_market_skill in
+# compute_facts), this also drops attributes (on_site, morning_shift) and
+# languages, which aren't skills at all.
+TOP_SKILLS_EXCLUDED_CATEGORIES = frozenset({"soft", "office_admin"})
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -216,11 +224,22 @@ def compute_facts(now_utc: datetime | None = None) -> dict:
         key=lambda r: (r["target_type"], r["target_key"]),
     )
 
-    # ---- posting volume, automated sources only ---------------------------
+    # ---- posting volume -- MUST match forecast.py's own volume definition
+    # exactly (VOLUME_SOURCE, "mustakbil" only), not AUTOMATED_SOURCES --
+    # AUTOMATED_SOURCES (mustakbil+indeed) is what forecast.py uses for
+    # SKILL targets specifically; volume actual/predicted has always been
+    # narrower, permanently Mustakbil-only (see forecast.py's run_grade()).
+    # Importing VOLUME_SOURCE instead of re-deriving this is what makes it
+    # structurally impossible for the briefing and the forecast engine to
+    # disagree about what a week's volume means -- a bug caught in the
+    # first published briefing (using AUTOMATED_SOURCES here happened to
+    # print the same numbers that week only because Indeed's history
+    # didn't start until after it, not because the scope was actually
+    # correct).
     postings = get_postings_for_forecast()
-    automated_postings = [p for p in postings if p.get("source") in AUTOMATED_SOURCES]
-    last_week_volume = _count_in_week(automated_postings, last_week_start)
-    prior_week_volume = _count_in_week(automated_postings, prior_week_start)
+    volume_postings = [p for p in postings if p.get("source") == VOLUME_SOURCE]
+    last_week_volume = _count_in_week(volume_postings, last_week_start)
+    prior_week_volume = _count_in_week(volume_postings, prior_week_start)
     volume_change = last_week_volume - prior_week_volume
     volume_change_pct = (
         round(volume_change / prior_week_volume * 100, 1) if prior_week_volume else None
@@ -230,10 +249,32 @@ def compute_facts(now_utc: datetime | None = None) -> dict:
     # (LinkedIn's first_seen_at is not a trustworthy recency signal -- see
     # forecast.py's module docstring -- so a week-bucketed skill ranking
     # restricts to AUTOMATED_SOURCES for the same reason forecast.py's own
-    # skill targets do, even though the task text only named "automated
-    # sources only" for the volume line explicitly.)
-    mentions = [m for m in get_skill_mentions_for_briefing() if m.get("extraction_method") == TAXONOMY_VERSION]
+    # skill targets do -- this is deliberately the WIDER mustakbil+indeed
+    # scope, not VOLUME_SOURCE, matching forecast.py's own skill/volume
+    # split exactly.)
+    #
+    # Substantive skills only -- requirement_type == 'skill' excludes
+    # attributes (on_site, morning_shift: a workplace ARRANGEMENT, not a
+    # skill) and languages; category excludes soft/office_admin (near-
+    # universal, low-signal). Same two-part filter api/main.py's curriculum
+    # endpoints apply (_is_teachable_skill there) -- a "top skills" list
+    # that leads with On-Site and Communication is a taxonomy-matching
+    # artifact, not a market finding.
+    automated_postings = [p for p in postings if p.get("source") in AUTOMATED_SOURCES]
     automated_index = {p["id"]: p for p in automated_postings}
+
+    def _is_market_skill(skill_key: str) -> bool:
+        spec = taxonomy["skills"].get(skill_key)
+        if not spec:
+            return False
+        if spec.get("requirement_type", "skill") != "skill":
+            return False
+        return spec.get("category") not in TOP_SKILLS_EXCLUDED_CATEGORIES
+
+    mentions = [
+        m for m in get_skill_mentions_for_briefing()
+        if m.get("extraction_method") == TAXONOMY_VERSION and _is_market_skill(m["skill"])
+    ]
 
     last_week_skill_counts = _skill_company_counts_in_week(mentions, automated_index, last_week_start)
     prior_week_skill_counts = _skill_company_counts_in_week(mentions, automated_index, prior_week_start)
@@ -278,7 +319,7 @@ def compute_facts(now_utc: datetime | None = None) -> dict:
             "targets": new_prediction_rows,
         },
         "posting_volume": {
-            "sources": [SOURCE_DISPLAY.get(s, s) for s in AUTOMATED_SOURCES],
+            "sources": [SOURCE_DISPLAY.get(VOLUME_SOURCE, VOLUME_SOURCE)],
             "last_week_label": last_week_label,
             "prior_week_label": prior_week_label,
             "last_week": last_week_volume,
@@ -544,15 +585,23 @@ def build_template_briefing(facts: dict) -> str:
 # Orchestration
 # --------------------------------------------------------------------------
 
-def run() -> dict:
+def run(force_regenerate: bool = False) -> dict:
+    """force_regenerate=True (CLI: --regenerate) intentionally publishes a
+    NEW briefing for the current target week even if one is already
+    active, then marks the old one superseded_by the new row's id. The
+    old row's own columns are never touched -- it stays exactly as
+    published, permanently readable as what was actually live at the
+    time. Used for correcting a bug in fact computation after the fact
+    (see storage.supersede_briefing); never used for the ordinary
+    scheduled path, which must stay a no-op on a week already done."""
     now_utc = datetime.now(timezone.utc)
     facts = compute_facts(now_utc)
     week_start = facts["week_start"]
 
-    from storage import get_briefing_for_week, insert_briefing
+    from storage import get_briefing_for_week, insert_briefing, supersede_briefing
 
     existing = get_briefing_for_week(week_start)
-    if existing:
+    if existing and not force_regenerate:
         logger.info(
             f"Briefing for week_start={week_start} already published "
             f"(source={existing['source']}) -- nothing to do"
@@ -600,7 +649,14 @@ def run() -> dict:
     }
     result = insert_briefing(row)
 
+    superseded_id: str | None = None
+    if existing and force_regenerate and result["inserted"]:
+        if supersede_briefing(existing["id"], result["row"]["id"]):
+            superseded_id = existing["id"]
+
     print(f"\n{'=' * 78}\nWEEKLY BRIEFING -- week of {week_start}\n{'=' * 78}")
+    if superseded_id:
+        print(f"NOTE: this supersedes briefing id={superseded_id} (kept, unmodified, as the audit record)")
     print(f"source: {source}" + (f"  (blocked: {blocked_reason})" if blocked_reason else ""))
     print(f"model_version: {model_version}")
     print(f"word_count: {len(body.split())}")
@@ -610,6 +666,10 @@ def run() -> dict:
     if not result["inserted"]:
         print("NOTE: not stored -- either the briefings table doesn't exist yet (run the "
               "migration SQL), or a row for this week already exists. See log above.")
+    elif existing and force_regenerate and not superseded_id:
+        print(f"WARNING: new briefing id={result['row']['id']} was published, but marking the "
+              f"prior briefing id={existing['id']} as superseded FAILED -- both rows are now "
+              f"active for week {week_start}. See log above; this needs manual attention.")
 
     return {
         "skipped": False,
@@ -617,11 +677,23 @@ def run() -> dict:
         "source": source,
         "blocked_reason": blocked_reason,
         "stored": result["inserted"],
+        "superseded": superseded_id,
     }
 
 
 def main() -> None:
-    run()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Rukhwise weekly briefing")
+    parser.add_argument(
+        "--regenerate", action="store_true",
+        help="Publish a new briefing for the current target week even if one is already "
+             "active, then mark the old one superseded_by the new row (the old row's own "
+             "columns are never touched). For correcting a bug in fact computation after "
+             "the fact -- never used by the ordinary scheduled path.",
+    )
+    args = parser.parse_args()
+    run(force_regenerate=args.regenerate)
 
 
 if __name__ == "__main__":

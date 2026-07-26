@@ -2213,9 +2213,20 @@ def paths_match(payload: PathsMatchRequest):
 # number and name in them is already independently verifiable via
 # facts_json -- but blocked_reason is exposed for anyone who wants to see
 # exactly why a given week fell back.
+#
+# superseded_by: a correction to an already-published week is a NEW row
+# (see briefing.py --regenerate / storage.supersede_briefing), never an
+# edit of the original -- the original stays exactly as published,
+# permanently, with superseded_by set to point at its replacement.
+# /briefings/latest surfaces only the current (non-superseded) row per
+# week, and -- when that row IS itself a correction -- also returns
+# `supersedes`, the original it replaced, so the page can disclose the
+# correction plainly instead of silently swapping the text.
 # --------------------------------------------------------------------------
 
-BRIEFING_SUMMARY_FIELDS = ("id", "week_start", "created_at", "body", "source", "model_version", "blocked_reason")
+BRIEFING_SUMMARY_FIELDS = (
+    "id", "week_start", "created_at", "body", "source", "model_version", "blocked_reason", "superseded_by",
+)
 
 
 def _briefing_summary(row: dict) -> dict:
@@ -2225,25 +2236,37 @@ def _briefing_summary(row: dict) -> dict:
 @app.get("/briefings/latest")
 @cached()
 def briefings_latest():
-    """The most recently published briefing (by week_start), or
+    """The current briefing for the most recent week that has one, or
     has_briefing=False if none have been published yet -- an honest empty
     state, not a 404, since "no briefing yet" is an expected, normal
-    condition (e.g. before the first Monday run)."""
+    condition (e.g. before the first Monday run). "Current" excludes any
+    row with superseded_by set -- a corrected week surfaces its
+    correction, not the original. If the surfaced row is itself a
+    correction, `supersedes` carries the original it replaced (full body
+    included) so the page can disclose that plainly, not None otherwise."""
     briefings = queries.get_briefings()
-    if not briefings:
+    current = [b for b in briefings if not b.get("superseded_by")]
+    if not current:
         return {"has_briefing": False}
-    latest = max(briefings, key=lambda r: r["week_start"])
-    return {"has_briefing": True, **_briefing_summary(latest)}
+    latest = max(current, key=lambda r: r["week_start"])
+
+    original = next((b for b in briefings if b.get("superseded_by") == latest["id"]), None)
+    return {
+        "has_briefing": True,
+        **_briefing_summary(latest),
+        "supersedes": _briefing_summary(original) if original else None,
+    }
 
 
 @app.get("/briefings")
 @cached()
 def briefings_list(limit: int = Query(default=12, ge=1, le=52)):
-    """Every published briefing, most recent week first, summary fields
-    only (facts_json omitted here -- it can be sizeable; fetch
-    /briefings/latest or a future /briefings/{week} for the full record
-    if that's ever needed)."""
-    briefings = sorted(queries.get_briefings(), key=lambda r: r["week_start"], reverse=True)
+    """Every published briefing, superseded ones included, most recent
+    week first (ties broken by created_at so a week's correction sorts
+    ahead of the original it replaced) -- the full audit trail, summary
+    fields only (facts_json omitted here -- it can be sizeable; fetch
+    /briefings/latest for the full record of the current one)."""
+    briefings = sorted(queries.get_briefings(), key=lambda r: (r["week_start"], r["created_at"]), reverse=True)
     rows = [_briefing_summary(r) for r in briefings[:limit]]
     return {"count": len(rows), "briefings": rows}
 
