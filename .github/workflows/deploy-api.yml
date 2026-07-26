@@ -1,0 +1,43 @@
+name: Deploy API to Render
+
+# Render's own "Deploy on Commit" auto-deploy is configured but has
+# silently stopped firing multiple times -- each time discovered only by
+# noticing stale text on the live site, not by any failure signal. This
+# workflow takes deployment into our own pipeline instead of trusting
+# Render to notice pushes on its own: a deploy hook curl either succeeds
+# or this workflow goes red in Actions, which is a signal we actually see.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "api/**"
+      - "requirements.txt"
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # Deliberately the only step: this workflow's entire job is to make
+      # Render aware a deploy-worthy change landed. The deploy hook URL is
+      # a secret precisely because it's a bearer credential -- anyone who
+      # has it can trigger a deploy -- so it is read from secrets only,
+      # never written into this file, and never echoed to the log.
+      - name: Trigger Render deploy hook
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK secret is not set -- cannot trigger a deploy"
+            exit 1
+          fi
+
+          http_status=$(curl -sS -o /tmp/render_response.txt -w "%{http_code}" -X POST "$RENDER_DEPLOY_HOOK")
+
+          echo "Render deploy hook responded with HTTP $http_status"
+          cat /tmp/render_response.txt
+
+          if [ "$http_status" -lt 200 ] || [ "$http_status" -ge 300 ]; then
+            echo "::error::Render deploy hook returned HTTP $http_status -- deploy was NOT triggered. This workflow exists to be the loud signal Render's own auto-deploy failed to be, so this failure is intentional, not a false alarm."
+            exit 1
+          fi

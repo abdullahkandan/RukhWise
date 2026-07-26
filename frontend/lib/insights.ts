@@ -67,15 +67,15 @@ export function classifyInsight(insight: Insight): InsightDisplay {
 }
 
 /**
- * "Researcher-flavored" insights -- about the data/methodology itself
- * (templated listings, foreign-currency pricing) rather than the market --
- * live on /engine under "Findings for the curious" instead of Home's
- * general-interest teaser.
+ * True for a 'system' insight -- about the data/methodology itself
+ * (templated listings, foreign-currency pricing) rather than the market.
+ * Lives on /engine under "Findings for the curious" instead of Home's
+ * general-interest teaser, which shows 'market' insights only. Reads the
+ * backend's explicit audience field directly -- this used to infer the
+ * split from each insight's distinctive value keys, which broke the
+ * moment a new generator was added without also updating this list; the
+ * backend setting audience itself is the fix.
  */
-export function isResearcherInsight(insight: Insight): boolean {
-  const v = insight.value;
-  return (
-    typeof v.templated_postings === "number" ||
-    (typeof v.by_currency === "object" && v.by_currency !== null)
-  );
+export function isSystemInsight(insight: Insight): boolean {
+  return insight.audience === "system";
 }

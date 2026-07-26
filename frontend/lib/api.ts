@@ -225,6 +225,11 @@ export interface Insight {
   detail: string;
   value: Record<string, unknown>;
   computed_at: string;
+  /** 'market' (a finding for someone looking for work -- Home) or
+   * 'system' (a finding about the pipeline/data itself -- /engine, where
+   * pipeline self-monitoring already lives). Set explicitly by every
+   * generator on the backend, not inferred client-side. */
+  audience: "market" | "system";
 }
 
 export interface InsightsLiveResponse {

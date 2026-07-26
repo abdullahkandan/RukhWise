@@ -3,7 +3,7 @@ import { Section } from "@/components/Section";
 import { Footer } from "@/components/Footer";
 import { EngineRoom } from "@/components/sections/EngineRoom";
 import { InsightStrip } from "@/components/sections/InsightStrip";
-import { isResearcherInsight } from "@/lib/insights";
+import { isSystemInsight } from "@/lib/insights";
 import { getInsightsLive, getPostingsForeignCurrency } from "@/lib/api";
 
 export const metadata: Metadata = {
@@ -21,7 +21,7 @@ export default async function EnginePage() {
   // below (system health, forecasts, backtest) is the load-bearing content
   // here; "Findings for the curious" is a nice-to-have that simply doesn't
   // render if either fetch comes back null.
-  const curiousInsights = insights ? insights.insights.filter(isResearcherInsight) : [];
+  const curiousInsights = insights ? insights.insights.filter(isSystemInsight) : [];
 
   return (
     <main>

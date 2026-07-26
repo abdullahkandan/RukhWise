@@ -1089,10 +1089,19 @@ def postings_foreign_currency():
 # Extensible generator pattern: each _insight_* function takes
 # (postings, mentions, taxonomy) and returns either None ("not noteworthy
 # right now, don't show it") or a dict with headline/detail/value/
-# computed_at plus an internal "score" used only for ranking -- score is
-# stripped before the response goes out, since it's a ranking mechanism,
-# not part of the documented insight shape. Adding a new insight later is
-# just adding a function to _INSIGHT_GENERATORS.
+# computed_at/audience plus an internal "score" used only for ranking --
+# score is stripped before the response goes out, since it's a ranking
+# mechanism, not part of the documented insight shape. Adding a new
+# insight later is just adding a function to _INSIGHT_GENERATORS.
+#
+# audience is 'market' (a finding for someone looking for work -- shown on
+# the homepage) or 'system' (a finding about the pipeline/data itself --
+# shown on /engine, where pipeline self-monitoring already lives). Every
+# generator sets this explicitly; nothing infers it from a value shape.
+# Two generators are 'system' by nature: the non-PKR-currency finding and
+# the Rozee templated-tagset finding are both about data quality, not
+# market demand -- genuinely useful, just the wrong audience for a
+# homepage aimed at a job seeker who has never seen this site.
 # --------------------------------------------------------------------------
 
 def _insight_top_mover(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
@@ -1155,6 +1164,7 @@ def _insight_top_mover(postings: list[dict], mentions: list[dict], taxonomy: dic
         ),
         "value": {"skill": skill_key, "current_week": cur, "previous_week": prev, "delta": delta},
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "audience": "market",
         "score": abs(delta),
     }
 
@@ -1194,6 +1204,7 @@ def _insight_templated_share(postings: list[dict], mentions: list[dict], taxonom
         ),
         "value": {"templated_postings": templated, "total_tagged_postings": total_tagged, "share": round(share, 4)},
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "audience": "system",
         "score": share * 100,
     }
 
@@ -1217,6 +1228,15 @@ def _insight_posting_lifespan(postings: list[dict], mentions: list[dict], taxono
 
     overall_days = [lifespan_days(p) for p in dropped]
     overall_median = statistics.median(overall_days)
+    if overall_median < 1:
+        # Most "dropped" postings right now were seen in exactly one
+        # scrape run (first_seen_at == last_seen_at), which floors the
+        # median at 0 -- not a real "postings barely stay listed" finding,
+        # just the metric having no signal yet at current collection
+        # history/frequency. "About 0 days" reads as broken, not true;
+        # suppressed rather than shown, same reasoning as the thin-sample
+        # suppressions elsewhere in this file.
+        return None
 
     by_city = defaultdict(list)
     for p in dropped:
@@ -1237,6 +1257,7 @@ def _insight_posting_lifespan(postings: list[dict], mentions: list[dict], taxono
             "by_city_median_days": city_medians,
         },
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "audience": "market",
         "score": overall_median,
     }
 
@@ -1295,6 +1316,7 @@ def _insight_dominance_ratio(postings: list[dict], mentions: list[dict], taxonom
             "ratio": round(ratio, 2),
         },
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "audience": "market",
         "score": ratio,
     }
 
@@ -1310,15 +1332,22 @@ def _insight_foreign_currency(postings: list[dict], mentions: list[dict], taxono
         {"title": p.get("title"), "currency": p["currency"], "detail_url": p.get("detail_url")}
         for p in foreign[:10]
     ]
+    breakdown_str = ", ".join(f"{currency}: {count}" for currency, count in breakdown.most_common())
 
     return {
         "headline": f"{len(foreign)} postings are priced in a non-PKR currency",
+        # System-audience detail: names the actual pipeline risk (averaging
+        # a foreign-currency figure into a PKR salary statistic without
+        # converting or excluding it first) rather than dumping the raw
+        # Counter repr, which read as a data structure, not a sentence.
         "detail": (
-            f"Breakdown: {dict(breakdown)}. These would silently skew salary aggregates "
-            f"if not filtered by currency."
+            f"By currency -- {breakdown_str}. These postings' salary figures aren't in PKR; "
+            f"any salary statistic that doesn't filter or convert by currency first would mix "
+            f"them in with PKR salaries and be wrong."
         ),
         "value": {"count": len(foreign), "by_currency": dict(breakdown), "examples": examples},
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "audience": "system",
         "score": len(foreign),
     }
 
@@ -1348,6 +1377,7 @@ def _insight_zero_technical(postings: list[dict], mentions: list[dict], taxonomy
         ),
         "value": {"zero_technical_count": zero_technical, "total_postings": len(postings), "share": round(share, 4)},
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "audience": "market",
         "score": share * 100,
     }
 
@@ -1383,6 +1413,7 @@ def _insight_strongest_pairing(postings: list[dict], mentions: list[dict], taxon
             "lift": best["lift"],
         },
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "audience": "market",
         "score": best["lift"],
     }
 
@@ -1424,8 +1455,12 @@ def _insight_top_skill_companion(postings: list[dict], mentions: list[dict], tax
             "joint_count": joint,
         },
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "audience": "market",
         "score": p_given * 100,
     }
+
+
+_TOP_COMPANY_MIN_POSTINGS = 20  # below this, "most active hirer" is too thin a sample -- suppressed, not hedged
 
 
 def _insight_top_company(postings: list[dict], mentions: list[dict], taxonomy: dict) -> dict | None:
@@ -1445,8 +1480,14 @@ def _insight_top_company(postings: list[dict], mentions: list[dict], taxonomy: d
         return None
 
     _, subset = max(grouped.items(), key=lambda kv: len(kv[1]))
-    if len(subset) < 3:
-        return None  # a "top company" with one or two postings isn't noteworthy
+    if len(subset) < _TOP_COMPANY_MIN_POSTINGS:
+        # Same suppression pattern as the thin-pairing insight: a single
+        # digit-count "most active hirer" is too thin a sample for a
+        # headline claim, and the top company (already the max by
+        # definition) is the only candidate that could clear the bar --
+        # if it doesn't, nothing else does either, so this suppresses the
+        # insight entirely rather than falling back to a smaller runner-up.
+        return None
 
     display_name = Counter(p["company"] for p in subset).most_common(1)[0][0]
     return {
@@ -1454,6 +1495,7 @@ def _insight_top_company(postings: list[dict], mentions: list[dict], taxonomy: d
         "detail": f"{len(subset)} distinct postings from {display_name} across the tracked window.",
         "value": {"company": display_name, "posting_count": len(subset)},
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "audience": "market",
         "score": len(subset),
     }
 

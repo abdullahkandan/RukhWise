@@ -5,7 +5,7 @@ import { FlowField } from "@/components/FlowField";
 import { InsightStrip } from "@/components/sections/InsightStrip";
 import { DoorwayPanel } from "@/components/DoorwayPanel";
 import { DataUnavailable } from "@/components/DataUnavailable";
-import { isResearcherInsight, isMarketSkill } from "@/lib/insights";
+import { isSystemInsight, isMarketSkill } from "@/lib/insights";
 import { getInsightsLive, getSkillsTop, getStatsOverview, getSystemHealth } from "@/lib/api";
 
 export default async function HomePage() {
@@ -29,14 +29,14 @@ export default async function HomePage() {
     );
   }
 
-  // Home is the teaser -- the researcher-flavored findings (templated-share,
-  // foreign-currency) live on /engine's "Findings for the curious" instead.
-  // insights degrades gracefully (empty strip) rather than failing the
-  // whole page -- it's a nice-to-have here, not load-bearing like Hero's
-  // numbers above. Capped at 3, not a fixed count: fewer genuinely
-  // noteworthy findings is better than padding out to a target number
-  // with a weak one.
-  const generalInsights = insights ? insights.insights.filter((i) => !isResearcherInsight(i)).slice(0, 3) : [];
+  // Home is the teaser -- 'system' insights (templated-share, foreign-
+  // currency: findings about the pipeline/data itself) live on /engine's
+  // "Findings for the curious" instead. insights degrades gracefully
+  // (empty strip) rather than failing the whole page -- it's a nice-to-
+  // have here, not load-bearing like Hero's numbers above. Capped at 3,
+  // not a fixed count: fewer genuinely noteworthy findings is better than
+  // padding out to a target number with a weak one.
+  const generalInsights = insights ? insights.insights.filter((i) => !isSystemInsight(i)).slice(0, 3) : [];
 
   // Market-skill filter (requirement_type === 'skill', category not soft/
   // office_admin) -- see isMarketSkill's own comment. Without the
