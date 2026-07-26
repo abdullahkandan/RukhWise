@@ -173,8 +173,8 @@ export function SkillGapPicker({ skills }: SkillGapPickerProps) {
                   {result.strong_matches.count}
                 </p>
                 <p className="mt-2 max-w-md font-sans text-sm text-java/60">
-                  {result.strong_matches.count === 1 ? "posting" : "postings"} right now — where your
-                  skills cover at least 70% of what&rsquo;s asked for.
+                  {result.strong_matches.count === 1 ? "posting" : "postings"}{" "}
+                  right now — where your skills cover at least 70% of what&rsquo;s asked for.
                 </p>
               </div>
 
