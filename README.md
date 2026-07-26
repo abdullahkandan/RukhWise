@@ -44,10 +44,10 @@ Python scrapers ──> Supabase (Postgres) ──> FastAPI (Render) ──> Nex
 | Source | Method | Notes |
 |---|---|---|
 | Mustakbil | Automated, daily | Primary source. Public API, listing + detail enrichment |
-| Indeed | Automated, daily | Via JobSpy; pending datacenter-IP verification before the schedule is fully trusted |
+| Indeed | Automated, daily | Via JobSpy; confirmed to survive GitHub's datacenter IPs |
 | Rozee.pk | Semi-manual, weekly | Cloudflare-protected; collected via a human-attended browser session |
 | BrightSpyre | Supplementary | |
-| LinkedIn | Best-effort, local | Guest endpoints via JobSpy, geo-filtered, excluded from forecast targets |
+| LinkedIn | Automated, daily | Via JobSpy; geo-filtered (guest search leaks non-PK listings), excluded from forecast targets due to staleness |
 
 ## Known limitations
 

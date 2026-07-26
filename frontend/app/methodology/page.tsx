@@ -49,18 +49,18 @@ export default function MethodologyPage() {
                 entirely rather than silently counted as &ldquo;no data disclosed.&rdquo;
               </p>
               <p className="mt-4">
-                <strong className="text-java">LinkedIn</strong> is collected locally,
-                best-effort, not on the automated daily schedule. Its guest search
-                endpoints (also via JobSpy) have been observed to return listings outside
+                <strong className="text-java">LinkedIn</strong> is collected daily via
+                JobSpy, the same automated cadence as Mustakbil and Indeed. Its guest
+                search endpoints have been observed to return listings outside
                 Pakistan despite a Pakistan-scoped location filter, so every LinkedIn row
                 is checked against a known-city/country match before being stored —
                 anything that doesn&rsquo;t resolve to Pakistan is dropped and logged, not
                 kept. LinkedIn also resurfaces postings that are genuinely weeks old;
                 those are still stored with their real posting date preserved, but
-                LinkedIn is excluded from the forecasting engine&rsquo;s targets
-                entirely, since a first-seen-today timestamp on a month-old listing would
-                corrupt a weekly-actuals model that assumes recent collection means
-                recent posting.
+                LinkedIn is excluded from the forecasting engine&rsquo;s targets entirely,
+                since a first-seen-today timestamp on a month-old listing would corrupt
+                a weekly-actuals model that assumes recent collection means recent
+                posting — that exclusion holds regardless of collection method.
               </p>
               <p className="mt-4">
                 <strong className="text-java">Corpus break, July 2026.</strong> Indeed
